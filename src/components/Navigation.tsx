@@ -66,17 +66,39 @@ export default function Navigation({ currentUser }: NavigationProps) {
     router.push('/club');
   };
 
-  // 토론방 진입 시 스포일러 조건 분기 핸들러 (공통 헬퍼 활용)
+  // 토론방 진입 시 스포일러 조건 분기 핸들러
   const handleDiscussionClick = () => {
     if (!currentUser) {
       window.location.href = '/login';
       return;
     }
 
+    // 1. 유저의 소속 모임 ID 및 독서 단계 가져오기
+    let myClubId = 'club-1';
+    try {
+      const membersData = localStorage.getItem('bookclub_mock_members');
+      const membersList = membersData ? JSON.parse(membersData) : [];
+      const myMemberRecord = membersList.find((m: any) => m.user_id === currentUser.id);
+      if (myMemberRecord) {
+        myClubId = myMemberRecord.club_id;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    const localStage = localStorage.getItem(`bookclub_mock_club_stage_${myClubId}`) || 'question_collecting';
+
+    // 2. 단계별 접근 차별화: 읽기(reading) 및 질문(question_collecting) 단계는 무조건 통과
+    if (localStage === 'reading' || localStage === 'question_collecting') {
+      router.push('/discussion');
+      return;
+    }
+
+    // 3. 토론(discussion) 및 결산(archiving)인 경우 완독 여부에 따라 경고 페이지 분기
     if (checkIsCompleted(currentUser.id)) {
       router.push('/discussion');
     } else {
-      router.push('/discussion-warning');
+      router.push(`/discussion-warning?stage=${localStage}`);
     }
   };
 

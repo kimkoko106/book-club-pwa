@@ -112,14 +112,24 @@ export default function HomePage() {
     }
   };
 
-  // 토론방 진입 판단 핸들러 (스포일러 방지 필터 공통 헬퍼 호출)
+  // 토론방 진입 판단 핸들러 (독서 단계별 스포일러 방지 필터)
   const handleDiscussionClick = () => {
     if (!currentUser) return;
+
+    // 1. 읽기 중(reading) 및 질문 수집(question_collecting) 단계에서는 스포일러 경고 없이 바로 진입
+    if (discussionStage === 'reading' || discussionStage === 'question_collecting') {
+      router.push('/discussion');
+      return;
+    }
+
+    // 2. 완독 사용자는 언제나 바로 진입 가능
     if (checkIsCompleted(currentUser.id)) {
       router.push('/discussion');
-    } else {
-      router.push('/discussion-warning');
+      return;
     }
+
+    // 3. 토론(discussion) 및 결산(archiving) 단계에서 완독 전인 경우 경고 페이지로 이동 (stage 파라미터 전달)
+    router.push(`/discussion-warning?stage=${discussionStage}`);
   };
 
   if (isLoading) {
