@@ -1262,9 +1262,17 @@ export default function PersonalBookshelfPage() {
               </button>
 
               {currentClubBook && currentClubBook.title === activeMenuBook.title && currentClubBook.author === activeMenuBook.author ? (
-                <div className="w-full p-3.5 bg-sage-light/10 border border-sage-light/35 rounded-xl text-[9px] text-sage-dark/80 font-bold flex flex-col gap-0.5 mt-1">
-                  <span>ℹ️ 이 책은 삭제할 수 없습니다.</span>
-                  <span className="text-[8.5px] opacity-75 font-semibold leading-relaxed">현재 모임 공식 공유 도서로 독서가 진행 중인 책입니다.</span>
+                <div className="flex flex-col gap-1 mt-1">
+                  <button
+                    disabled
+                    className="w-full text-left py-3 px-4.5 bg-background border border-card-border/30 rounded-xl text-[10.5px] font-bold text-foreground/30 flex items-center justify-between cursor-not-allowed opacity-50"
+                  >
+                    <span>🗑 내 책장에서 삭제</span>
+                    <span className="text-[8.5px] font-bold opacity-60">삭제 불가</span>
+                  </button>
+                  <p className="text-[8.5px] text-foreground/45 font-semibold text-center mt-1">
+                    ℹ️ 현재 모임 공식 공유 도서로 독서가 진행 중인 책입니다.
+                  </p>
                 </div>
               ) : (
                 <button
