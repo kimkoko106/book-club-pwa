@@ -1,5 +1,6 @@
 -- Supabase PostgreSQL Database Schema
 -- 독서 PWA (1인 독서방 & 그룹 독서모임 융합 구조)
+-- RLS 무한 재귀 오류 방지를 위한 헬퍼 함수 적용 버전
 
 -- 1. Profiles (사용자 프로필)
 create table if not exists public.profiles (
@@ -35,27 +36,6 @@ create table if not exists public.groups (
 
 alter table public.groups enable row level security;
 
--- 모임 참가자이거나, 개설자이거나, 공개방일 때 조회 가능
-create policy "Users can view public groups, groups they are member of, or they created." on public.groups
-  for select using (
-    visibility = 'public' or
-    created_by = auth.uid() or
-    auth.uid() in (
-      select user_id from public.group_members where group_id = id
-    )
-  );
-
-create policy "Authenticated users can create groups." on public.groups
-  for insert with check (auth.uid() = created_by);
-
-create policy "Group creators or admins can update groups." on public.groups
-  for update using (
-    created_by = auth.uid() or
-    auth.uid() in (
-      select user_id from public.group_members where group_id = id and role = 'admin'
-    )
-  );
-
 
 -- 3. Group Members (공간 구성원)
 create table if not exists public.group_members (
@@ -69,11 +49,52 @@ create table if not exists public.group_members (
 
 alter table public.group_members enable row level security;
 
+
+-- RLS 무한 재귀 방지용 Security Definer 헬퍼 함수 정의
+-- 이 함수는 RLS를 거치지 않고 superuser 권한으로 group_members 레코드를 검증합니다.
+create or replace function public.is_group_member(target_group_id uuid, target_user_id uuid)
+returns boolean
+security definer
+language plpgsql
+stable -- 동일 입력값에 대해 항상 동일 결과 반환
+as $$
+begin
+  return exists (
+    select 1 
+    from public.group_members 
+    where group_members.group_id = target_group_id 
+      and group_members.user_id = target_user_id
+  );
+end;
+$$;
+
+
+-- 2-1. Groups RLS Select/Update 규칙 재정의 (헬퍼 함수 활용)
+create policy "Users can view public groups, groups they are member of, or they created." on public.groups
+  for select using (
+    visibility = 'public' or
+    created_by = auth.uid() or
+    public.is_group_member(id, auth.uid())
+  );
+
+create policy "Group creators or admins can update groups." on public.groups
+  for update using (
+    created_by = auth.uid() or
+    exists (
+      select 1 
+      from public.group_members 
+      where group_id = id 
+        and user_id = auth.uid() 
+        and role = 'admin'
+    )
+  );
+
+
+-- 3-1. Group Members RLS 규칙 재정의 (헬퍼 함수 활용)
 create policy "Members can view other members in the same group." on public.group_members
   for select using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    )
+    auth.uid() = user_id or
+    public.is_group_member(group_id, auth.uid())
   );
 
 create policy "Users can join a group." on public.group_members
@@ -81,16 +102,24 @@ create policy "Users can join a group." on public.group_members
 
 create policy "Admins can manage group members." on public.group_members
   for update using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id and role = 'admin'
+    exists (
+      select 1 
+      from public.group_members 
+      where group_id = group_members.group_id 
+        and user_id = auth.uid() 
+        and role = 'admin'
     )
   );
 
 create policy "Members can leave or admins can kick from group." on public.group_members
   for delete using (
     auth.uid() = user_id or
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id and role = 'admin'
+    exists (
+      select 1 
+      from public.group_members 
+      where group_id = group_members.group_id 
+        and user_id = auth.uid() 
+        and role = 'admin'
     )
   );
 
@@ -154,8 +183,11 @@ alter table public.user_book_memos enable row level security;
 
 create policy "Users can manage memos of their own library books." on public.user_book_memos
   for all using (
-    auth.uid() in (
-      select user_id from public.user_books where id = user_book_id
+    exists (
+      select 1 
+      from public.user_books 
+      where id = user_book_id 
+        and user_id = auth.uid()
     )
   );
 
@@ -178,21 +210,29 @@ alter table public.monthly_books enable row level security;
 
 create policy "Members can view monthly books of their groups." on public.monthly_books
   for select using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    ) or
-    auth.uid() in (
-      select created_by from public.groups where id = group_id
+    public.is_group_member(group_id, auth.uid()) or
+    exists (
+      select 1 
+      from public.groups 
+      where id = group_id 
+        and created_by = auth.uid()
     )
   );
 
 create policy "Group admins can insert/update monthly books." on public.monthly_books
   for all using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id and role = 'admin'
+    exists (
+      select 1 
+      from public.group_members 
+      where group_id = monthly_books.group_id 
+        and user_id = auth.uid() 
+        and role = 'admin'
     ) or
-    auth.uid() in (
-      select created_by from public.groups where id = group_id
+    exists (
+      select 1 
+      from public.groups 
+      where id = monthly_books.group_id 
+        and created_by = auth.uid()
     )
   );
 
@@ -215,24 +255,18 @@ alter table public.questions enable row level security;
 
 create policy "Group members can view questions in their group." on public.questions
   for select using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    )
+    public.is_group_member(group_id, auth.uid())
   );
 
 create policy "Group members can suggest questions." on public.questions
   for insert with check (
     auth.uid() = user_id and
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    )
+    public.is_group_member(group_id, auth.uid())
   );
 
 create policy "Group members can update reactions, or admins can manage status/spoiler." on public.questions
   for update using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    )
+    public.is_group_member(group_id, auth.uid())
   );
 
 
@@ -249,22 +283,22 @@ alter table public.question_feedback enable row level security;
 
 create policy "Group members can view feedbacks on questions of their group." on public.question_feedback
   for select using (
-    auth.uid() in (
-      select gm.user_id 
-      from public.group_members gm
-      join public.questions q on q.group_id = gm.group_id
-      where q.id = question_id
+    exists (
+      select 1 
+      from public.questions q 
+      where q.id = question_id 
+        and public.is_group_member(q.group_id, auth.uid())
     )
   );
 
 create policy "Group members can write feedback." on public.question_feedback
   for insert with check (
     auth.uid() = user_id and
-    auth.uid() in (
-      select gm.user_id 
-      from public.group_members gm
-      join public.questions q on q.group_id = gm.group_id
-      where q.id = question_id
+    exists (
+      select 1 
+      from public.questions q 
+      where q.id = question_id 
+        and public.is_group_member(q.group_id, auth.uid())
     )
   );
 
@@ -282,22 +316,22 @@ alter table public.discussion_comments enable row level security;
 
 create policy "Group members can view comments on questions of their group." on public.discussion_comments
   for select using (
-    auth.uid() in (
-      select gm.user_id 
-      from public.group_members gm
-      join public.questions q on q.group_id = gm.group_id
-      where q.id = question_id
+    exists (
+      select 1 
+      from public.questions q 
+      where q.id = question_id 
+        and public.is_group_member(q.group_id, auth.uid())
     )
   );
 
 create policy "Group members can post comments." on public.discussion_comments
   for insert with check (
     auth.uid() = user_id and
-    auth.uid() in (
-      select gm.user_id 
-      from public.group_members gm
-      join public.questions q on q.group_id = gm.group_id
-      where q.id = question_id
+    exists (
+      select 1 
+      from public.questions q 
+      where q.id = question_id 
+        and public.is_group_member(q.group_id, auth.uid())
     )
   );
 
@@ -320,31 +354,29 @@ alter table public.book_recommendations enable row level security;
 
 create policy "Group members can view recommendations in their group." on public.book_recommendations
   for select using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    )
+    public.is_group_member(group_id, auth.uid())
   );
 
 create policy "Group members can submit book recommendations." on public.book_recommendations
   for insert with check (
     auth.uid() = user_id and
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    )
+    public.is_group_member(group_id, auth.uid())
   );
 
 create policy "Group members can update recommendation reactions." on public.book_recommendations
   for update using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    )
+    public.is_group_member(group_id, auth.uid())
   );
 
 create policy "Recommender or admin can remove recommendation." on public.book_recommendations
   for delete using (
     auth.uid() = user_id or
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id and role = 'admin'
+    exists (
+      select 1 
+      from public.group_members 
+      where group_id = book_recommendations.group_id 
+        and user_id = auth.uid() 
+        and role = 'admin'
     )
   );
 
@@ -368,20 +400,28 @@ alter table public.archives enable row level security;
 
 create policy "Members can view archives of their group." on public.archives
   for select using (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id
-    ) or
-    auth.uid() in (
-      select created_by from public.groups where id = group_id
+    public.is_group_member(group_id, auth.uid()) or
+    exists (
+      select 1 
+      from public.groups 
+      where id = group_id 
+        and created_by = auth.uid()
     )
   );
 
 create policy "Only system or admin can create archives." on public.archives
   for insert with check (
-    auth.uid() in (
-      select user_id from public.group_members where group_id = group_id and role = 'admin'
+    exists (
+      select 1 
+      from public.group_members 
+      where group_id = archives.group_id 
+        and user_id = auth.uid() 
+        and role = 'admin'
     ) or
-    auth.uid() in (
-      select created_by from public.groups where id = group_id
+    exists (
+      select 1 
+      from public.groups 
+      where id = archives.group_id 
+        and created_by = auth.uid()
     )
   );
