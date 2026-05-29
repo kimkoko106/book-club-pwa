@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Home, MessageSquare, Library, Users } from 'lucide-react';
 import { useRouter, usePathname } from 'next/navigation';
 import { checkIsCompleted } from '../lib/supabase';
@@ -13,6 +13,38 @@ interface NavigationProps {
 export default function Navigation({ currentUser }: NavigationProps) {
   const router = useRouter();
   const pathname = usePathname();
+
+  // 전역 모달 상태 트래킹
+  const [hasModal, setHasModal] = useState(false);
+
+  useEffect(() => {
+    const checkModals = () => {
+      const backdrop = document.querySelector('.backdrop-blur-xs, .bg-foreground\\/45, .bg-black\\/40');
+      const isOpened = !!backdrop;
+      setHasModal(isOpened);
+      document.body.classList.toggle('has-modal', isOpened);
+    };
+
+    checkModals();
+
+    const observer = new MutationObserver(() => {
+      checkModals();
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class'],
+    });
+
+    return () => {
+      observer.disconnect();
+      document.body.classList.remove('has-modal');
+    };
+  }, []);
+
+  if (hasModal) return null;
 
   const getTabClass = (path: string) => {
     const isActive = 
@@ -49,7 +81,7 @@ export default function Navigation({ currentUser }: NavigationProps) {
   };
 
   return (
-    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-card-bg/95 backdrop-blur-md border-t border-card-border px-6 py-3.5 flex justify-around items-center z-50 shadow-lg">
+    <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-card-bg/95 backdrop-blur-md border-t border-card-border px-6 py-3.5 flex justify-around items-center z-[110] shadow-lg">
       <button
         onClick={() => router.push('/')}
         className={getTabClass('/')}

@@ -830,10 +830,24 @@ export default function PersonalBookshelfPage() {
           MODAL 1: 내 책장에 책 추가 Bottom Sheet
       ========================================== */}
       {isAddBookModalOpen && (
-        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
+        <div className="fixed inset-0 z-[100]">
+          <div 
+            className="absolute inset-0 bg-foreground/45 backdrop-blur-xs animate-fade-in"
+            onClick={() => {
+              setIsAddBookModalOpen(false);
+              setSelectedAddBook(null);
+              setSearchQuery('');
+              setAddBookStatus('reading');
+              setIsDirectInput(false);
+              setDirectTitle('');
+              setDirectAuthor('');
+              setDirectCoverUrl('');
+            }}
+          />
           <form 
             onSubmit={handleAddBookToShelf}
-            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            className="absolute left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-card-bg border-t border-card-border rounded-t-2xl p-5 pb-6 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            style={{ bottom: 'calc(68px + env(safe-area-inset-bottom, 0px))' }}
           >
             {/* 모달 헤더 */}
             <div className="flex justify-between items-center">
@@ -1108,10 +1122,19 @@ export default function PersonalBookshelfPage() {
           MODAL 2: 모임에 책 추천 Bottom Sheet
       ========================================== */}
       {isRecommendModalOpen && selectedRecommendBook && (
-        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
+        <div className="fixed inset-0 z-[100]">
+          <div 
+            className="absolute inset-0 bg-foreground/45 backdrop-blur-xs animate-fade-in"
+            onClick={() => {
+              setSelectedRecommendBook(null);
+              setRecommendReason('');
+              setIsRecommendModalOpen(false);
+            }}
+          />
           <form 
             onSubmit={handleRecommendToClub}
-            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            className="absolute left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-card-bg border-t border-card-border rounded-t-2xl p-5 pb-6 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            style={{ bottom: 'calc(68px + env(safe-area-inset-bottom, 0px))' }}
           >
             {/* 모달 헤더 */}
             <div className="flex justify-between items-center">
@@ -1223,12 +1246,14 @@ export default function PersonalBookshelfPage() {
           MODAL 3: 책장 정리 액션 메뉴 Bottom Sheet
       ========================================== */}
       {isMenuOpen && activeMenuBook && (
-        <div 
-          className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in"
-          onClick={() => setIsMenuOpen(false)}
-        >
+        <div className="fixed inset-0 z-[100]">
           <div 
-            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl px-5 pt-5 pb-12 shadow-2xl flex flex-col gap-4 max-h-[80vh] overflow-y-auto animate-slide-up"
+            className="absolute inset-0 bg-foreground/45 backdrop-blur-xs animate-fade-in"
+            onClick={() => setIsMenuOpen(false)}
+          />
+          <div 
+            className="absolute left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-card-bg border border-card-border rounded-t-2xl px-5 pt-5 pb-6 shadow-2xl flex flex-col gap-4 max-h-[80vh] overflow-y-auto animate-slide-up"
+            style={{ bottom: 'calc(68px + env(safe-area-inset-bottom, 0px))' }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center pb-2 border-b border-card-border/30">
@@ -1262,15 +1287,15 @@ export default function PersonalBookshelfPage() {
               </button>
 
               {currentClubBook && currentClubBook.title === activeMenuBook.title && currentClubBook.author === activeMenuBook.author ? (
-                <div className="flex flex-col gap-1.5 mt-1 bg-background/40 border border-card-border/50 rounded-xl p-3.5">
-                  <div className="flex items-start gap-3 opacity-30 select-none">
-                    <span className="text-sm mt-0.5">🗑</span>
-                    <div className="flex flex-col items-start gap-0.5">
-                      <span className="text-[10.5px] font-black text-foreground">내 책장에서 삭제</span>
-                      <span className="text-[8px] text-foreground/70 font-semibold">책장과 메모에서 제거됩니다</span>
+                <div className="w-full bg-background/40 border border-card-border/50 rounded-xl py-2 px-4.5 flex flex-col gap-1">
+                  <div className="flex items-center gap-3 opacity-30 select-none">
+                    <span className="text-[11px] select-none text-rose-800/80">🗑</span>
+                    <div className="flex flex-col items-start leading-tight">
+                      <span className="text-[10.5px] font-bold text-foreground">내 책장에서 삭제</span>
+                      <span className="text-[7.5px] text-foreground/70 font-semibold">책장과 메모에서 제거됩니다</span>
                     </div>
                   </div>
-                  <p className="text-[8px] text-red-500/80 font-black text-center mt-1 pt-1.5 border-t border-card-border/30">
+                  <p className="text-[7.5px] text-red-500/80 font-black text-center pt-1 border-t border-card-border/30">
                     ℹ️ 현재 모임 공유책으로 사용 중이라 삭제할 수 없어요.
                   </p>
                 </div>
@@ -1280,12 +1305,12 @@ export default function PersonalBookshelfPage() {
                     setIsMenuOpen(false);
                     setIsDeleteOpen(true);
                   }}
-                  className="w-full text-left py-3 px-4.5 bg-red-50/10 hover:bg-red-50/30 border border-red-200/20 rounded-xl text-red-500 hover:text-red-600 cursor-pointer transition-all flex items-start gap-3"
+                  className="w-full text-left py-2 px-4.5 bg-rose-900/5 hover:bg-rose-900/10 border border-rose-900/15 rounded-xl text-rose-800/90 hover:text-rose-900 cursor-pointer transition-all flex items-center gap-3"
                 >
-                  <span className="text-sm mt-0.5 select-none">🗑</span>
-                  <div className="flex flex-col items-start gap-0.5">
-                    <span className="text-[10.5px] font-black">내 책장에서 삭제</span>
-                    <span className="text-[8px] text-red-400 font-semibold">책장과 메모에서 제거됩니다</span>
+                  <span className="text-[11px] select-none text-rose-800/80">🗑</span>
+                  <div className="flex flex-col items-start leading-tight">
+                    <span className="text-[10.5px] font-bold">내 책장에서 삭제</span>
+                    <span className="text-[7.5px] text-rose-800/60 font-semibold">책장과 메모에서 제거됩니다</span>
                   </div>
                 </button>
               )}
@@ -1298,10 +1323,18 @@ export default function PersonalBookshelfPage() {
           MODAL 4: 책 정보 수정 Bottom Sheet
       ========================================== */}
       {isEditOpen && activeMenuBook && (
-        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
+        <div className="fixed inset-0 z-[100]">
+          <div 
+            className="absolute inset-0 bg-foreground/45 backdrop-blur-xs animate-fade-in"
+            onClick={() => {
+              setIsEditOpen(false);
+              setActiveMenuBook(null);
+            }}
+          />
           <form 
             onSubmit={handleSaveEdit}
-            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            className="absolute left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-card-bg border-t border-card-border rounded-t-2xl p-5 pb-6 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            style={{ bottom: 'calc(68px + env(safe-area-inset-bottom, 0px))' }}
           >
             <div className="flex justify-between items-center">
               <div className="flex flex-col">
@@ -1473,10 +1506,18 @@ export default function PersonalBookshelfPage() {
           MODAL 4-2: 모임 추천 수정 Bottom Sheet
       ========================================== */}
       {isRecommendEditOpen && activeMenuBook && (
-        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
+        <div className="fixed inset-0 z-[100]">
+          <div 
+            className="absolute inset-0 bg-foreground/45 backdrop-blur-xs animate-fade-in"
+            onClick={() => {
+              setIsRecommendEditOpen(false);
+              setActiveMenuBook(null);
+            }}
+          />
           <form 
             onSubmit={handleSaveRecommendEdit}
-            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            className="absolute left-1/2 -translate-x-1/2 w-full max-w-[480px] bg-card-bg border-t border-card-border rounded-t-2xl p-5 pb-6 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+            style={{ bottom: 'calc(68px + env(safe-area-inset-bottom, 0px))' }}
           >
             <div className="flex justify-between items-center">
               <div className="flex flex-col">
@@ -1601,7 +1642,7 @@ export default function PersonalBookshelfPage() {
           MODAL 5: 책장에서 삭제 확인 팝업
       ========================================== */}
       {isDeleteOpen && activeMenuBook && (
-        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-center justify-center z-50 p-6 animate-fade-in">
+        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-center justify-center z-[100] p-6 animate-fade-in">
           <div className="bg-card-bg border border-card-border w-full max-w-[340px] rounded-2xl p-5 shadow-2xl flex flex-col gap-4 animate-scale-up">
             <div className="text-center flex flex-col gap-1.5">
               <h4 className="text-xs font-black text-foreground">내 책장에서 삭제할까요?</h4>
@@ -1648,9 +1689,7 @@ export default function PersonalBookshelfPage() {
       )}
 
       {/* 하단 내비게이션 바 */}
-      {!isMenuOpen && !isEditOpen && !isRecommendEditOpen && !isDeleteOpen && !isAddBookModalOpen && (
-        <Navigation currentUser={currentUser} onLogout={() => {}} />
-      )}
+      <Navigation currentUser={currentUser} onLogout={() => {}} />
     </div>
   );
 }

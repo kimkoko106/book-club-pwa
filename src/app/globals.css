@@ -61,3 +61,24 @@ body {
   background: var(--sage-medium);
 }
 
+/* 모달/오버레이 활성화 시 전역 레이아웃 정책 */
+body.has-modal nav.fixed.bottom-0 {
+  display: none !important;
+}
+
+/* 네비게이션 예약 여백 제거 */
+body.has-modal .mobile-container {
+  padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+}
+
+/* Bottom Sheet 하단 밀착 오버라이드 및 내부 패딩 표준화 */
+body.has-modal form.absolute[style*="bottom"],
+body.has-modal div.absolute[style*="bottom"] {
+  bottom: env(safe-area-inset-bottom, 0px) !important;
+}
+
+body.has-modal .animate-slide-up {
+  padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px)) !important;
+}
+
+
