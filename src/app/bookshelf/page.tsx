@@ -154,6 +154,7 @@ export default function PersonalBookshelfPage() {
   const [activeMenuBook, setActiveMenuBook] = useState<ShelfBook | null>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isRecommendEditOpen, setIsRecommendEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [currentClubBook, setCurrentClubBook] = useState<{ title: string; author: string } | null>(null);
 
@@ -251,7 +252,7 @@ export default function PersonalBookshelfPage() {
     }
   };
 
-  // 책 수정 모달 오픈 및 데이터 세팅
+  // 책 정보 수정 모달 오픈
   const handleOpenEdit = (book: ShelfBook) => {
     setActiveMenuBook(book);
     setEditTitle(book.title);
@@ -259,6 +260,14 @@ export default function PersonalBookshelfPage() {
     setEditCoverUrl(book.cover_url || '');
     setEditStatus(book.status);
     setEditProgress(book.progress || 0);
+    
+    setIsMenuOpen(false);
+    setIsEditOpen(true);
+  };
+
+  // 모임 추천 수정 모달 오픈
+  const handleOpenRecommendEdit = (book: ShelfBook) => {
+    setActiveMenuBook(book);
     setEditIsRecommended(book.is_recommended);
     
     // 추천 세부 정보 로드
@@ -279,10 +288,10 @@ export default function PersonalBookshelfPage() {
     }
     
     setIsMenuOpen(false);
-    setIsEditOpen(true);
+    setIsRecommendEditOpen(true);
   };
 
-  // 도서 수정 처리 저장
+  // 도서 정보 수정 처리 저장
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeMenuBook) return;
@@ -291,7 +300,7 @@ export default function PersonalBookshelfPage() {
       return;
     }
 
-    // 1. 책장 스토리지 업데이트
+    // 1. 책장 스토리지 업데이트 (공유책 매핑 방지 등 제목/저자가 바뀌면 추천 데이터에도 매칭 업데이트)
     const updatedShelf = shelfBooks.map(b => {
       if (b.id === activeMenuBook.id) {
         return {
@@ -301,7 +310,45 @@ export default function PersonalBookshelfPage() {
           cover_url: editCoverUrl.trim(),
           status: editStatus,
           progress: editStatus === 'reading' ? Number(editProgress) : undefined,
-          completed_date: editStatus === 'completed' ? (b.completed_date || new Date().toISOString().split('T')[0].replace(/-/g, '.')) : undefined,
+          completed_date: editStatus === 'completed' ? (b.completed_date || new Date().toISOString().split('T')[0].replace(/-/g, '.')) : undefined
+        };
+      }
+      return b;
+    });
+    setShelfBooks(updatedShelf);
+    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+
+    // 추천방 연동 정보의 제목/저자 및 표지도 함께 업데이트
+    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
+    if (storedCandidatesStr) {
+      let candidates = JSON.parse(storedCandidatesStr);
+      const matchedIndex = candidates.findIndex((c: any) => c.title === activeMenuBook.title && c.author === activeMenuBook.author);
+      if (matchedIndex > -1) {
+        candidates[matchedIndex] = {
+          ...candidates[matchedIndex],
+          title: editTitle.trim(),
+          author: editAuthor.trim() || '지은이 없음',
+          cover_url: editCoverUrl.trim()
+        };
+        localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(candidates));
+      }
+    }
+
+    setIsEditOpen(false);
+    setActiveMenuBook(null);
+    alert(`[${editTitle}] 도서 정보가 수정되었습니다.`);
+  };
+
+  // 모임 추천 수정 처리 저장
+  const handleSaveRecommendEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeMenuBook) return;
+
+    // 1. 책장 추천 상태 업데이트
+    const updatedShelf = shelfBooks.map(b => {
+      if (b.id === activeMenuBook.id) {
+        return {
+          ...b,
           is_recommended: editIsRecommended
         };
       }
@@ -310,7 +357,7 @@ export default function PersonalBookshelfPage() {
     setShelfBooks(updatedShelf);
     localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
 
-    // 2. 모임 추천 연동 처리
+    // 2. 추천방 연동 처리
     const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
     let candidates = storedCandidatesStr ? JSON.parse(storedCandidatesStr) : [];
     
@@ -318,9 +365,9 @@ export default function PersonalBookshelfPage() {
       const matchedIndex = candidates.findIndex((c: any) => c.title === activeMenuBook.title && c.author === activeMenuBook.author);
       const newCandidate = {
         id: matchedIndex > -1 ? candidates[matchedIndex].id : `cand-${Date.now()}`,
-        title: editTitle.trim(),
-        author: editAuthor.trim() || '지은이 없음',
-        cover_url: editCoverUrl.trim(),
+        title: activeMenuBook.title,
+        author: activeMenuBook.author,
+        cover_url: activeMenuBook.cover_url || '',
         total_pages: 300,
         recommended_by: currentUser?.username || '익명',
         type: editRecommendType,
@@ -339,9 +386,9 @@ export default function PersonalBookshelfPage() {
     }
     localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(candidates));
 
-    setIsEditOpen(false);
+    setIsRecommendEditOpen(false);
     setActiveMenuBook(null);
-    alert(`[${editTitle}] 도서가 서재에 아름답게 다시 꽂혔습니다.`);
+    alert(`[${activeMenuBook.title}] 모임 추천 설정이 저장되었습니다.`);
   };
 
   // 도서 삭제 처리
@@ -1200,9 +1247,18 @@ export default function PersonalBookshelfPage() {
             <div className="flex flex-col gap-2">
               <button
                 onClick={() => handleOpenEdit(activeMenuBook)}
-                className="w-full text-left py-3 px-4.5 bg-background hover:bg-sage-light/10 border border-card-border/60 rounded-xl text-[10.5px] font-bold text-foreground/80 cursor-pointer transition-all"
+                className="w-full text-left py-3 px-4.5 bg-background hover:bg-sage-light/10 border border-card-border/60 rounded-xl text-[10.5px] font-bold text-foreground/80 cursor-pointer transition-all flex items-center justify-between"
               >
-                ✏ 책 정보 및 모임 추천 수정
+                <span>✏ 책 정보 수정</span>
+                <span className="text-[8px] font-bold text-foreground/35">상태, 진행률, 표지 등</span>
+              </button>
+
+              <button
+                onClick={() => handleOpenRecommendEdit(activeMenuBook)}
+                className="w-full text-left py-3 px-4.5 bg-background hover:bg-sage-light/10 border border-card-border/60 rounded-xl text-[10.5px] font-bold text-foreground/80 cursor-pointer transition-all flex items-center justify-between"
+              >
+                <span>🌲 모임 추천 설정 수정</span>
+                <span className="text-[8px] font-bold text-sage-medium">후보방 코멘트 관리</span>
               </button>
 
               {currentClubBook && currentClubBook.title === activeMenuBook.title && currentClubBook.author === activeMenuBook.author ? (
@@ -1216,9 +1272,10 @@ export default function PersonalBookshelfPage() {
                     setIsMenuOpen(false);
                     setIsDeleteOpen(true);
                   }}
-                  className="w-full text-left py-3 px-4.5 bg-background hover:bg-red-50 border border-red-200/30 rounded-xl text-[10.5px] font-bold text-red-500 cursor-pointer transition-all"
+                  className="w-full text-left py-3 px-4.5 bg-background hover:bg-red-50 border border-red-200/30 rounded-xl text-[10.5px] font-bold text-red-500 cursor-pointer transition-all flex items-center justify-between"
                 >
-                  🗑 내 책장에서 삭제하기
+                  <span>🗑 내 책장에서 삭제</span>
+                  <span className="text-[8.5px] font-bold opacity-60">서재 정리</span>
                 </button>
               )}
             </div>
@@ -1227,7 +1284,7 @@ export default function PersonalBookshelfPage() {
       )}
 
       {/* ==========================================
-          MODAL 4: 책 정보 및 모임 추천 수정 Bottom Sheet
+          MODAL 4: 책 정보 수정 Bottom Sheet
       ========================================== */}
       {isEditOpen && activeMenuBook && (
         <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
@@ -1237,8 +1294,8 @@ export default function PersonalBookshelfPage() {
           >
             <div className="flex justify-between items-center">
               <div className="flex flex-col">
-                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">책 정보 가꾸기</span>
-                <h3 className="text-xs font-black text-foreground mt-0.5">책 정보 및 추천 수정</h3>
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">책장에서 다듬기</span>
+                <h3 className="text-xs font-black text-foreground mt-0.5">책 정보 수정</h3>
               </div>
               <button 
                 type="button"
@@ -1378,9 +1435,75 @@ export default function PersonalBookshelfPage() {
               </div>
             )}
 
-            {/* 모임 추천 토글 */}
-            <div className="flex flex-col gap-2 border-t border-card-border/30 pt-3">
-              <label className="flex items-center justify-between cursor-pointer py-1">
+            {/* 버튼 영역 */}
+            <div className="flex gap-2.5 mt-2">
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsEditOpen(false);
+                  setActiveMenuBook(null);
+                }}
+                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
+              >
+                취소
+              </button>
+              <button 
+                type="submit"
+                className="flex-1 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs cursor-pointer"
+              >
+                저장하기
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 4-2: 모임 추천 수정 Bottom Sheet
+      ========================================== */}
+      {isRecommendEditOpen && activeMenuBook && (
+        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
+          <form 
+            onSubmit={handleSaveRecommendEdit}
+            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+          >
+            <div className="flex justify-between items-center">
+              <div className="flex flex-col">
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">생각 나누기</span>
+                <h3 className="text-xs font-black text-foreground mt-0.5">모임 추천 수정</h3>
+              </div>
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsRecommendEditOpen(false);
+                  setActiveMenuBook(null);
+                }}
+                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer"
+              >
+                <X size={12} />
+              </button>
+            </div>
+
+            {/* 책 기본 프리뷰 */}
+            <div className="bg-background border border-card-border rounded-xl p-3 flex gap-2.5 items-center">
+              {activeMenuBook.cover_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={activeMenuBook.cover_url} alt="책" className="w-7 h-10 rounded object-cover border border-card-border" />
+              ) : (
+                <div className="w-7 h-10 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[10px] select-none flex-shrink-0 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
+                  {activeMenuBook.title.charAt(0)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h5 className="text-[10px] font-black text-foreground truncate">{activeMenuBook.title}</h5>
+                <span className="text-[8.5px] text-foreground/45 font-medium truncate">{activeMenuBook.author}</span>
+              </div>
+            </div>
+
+            {/* 추천 여부 및 폼 */}
+            <div className="flex flex-col gap-2">
+              <label className="flex items-center justify-between cursor-pointer py-1.5 border-b border-card-border/30">
                 <span className="text-[10px] font-black text-foreground/75">🌲 우리 모임에 이 책을 추천하기</span>
                 <input 
                   type="checkbox" 
@@ -1390,8 +1513,8 @@ export default function PersonalBookshelfPage() {
                 />
               </label>
 
-              {/* 추천 활성화 시 추가 설정 */}
-              {editIsRecommended && (
+              {/* 추천 활성화 시 세부 정보 설정 */}
+              {editIsRecommended ? (
                 <div className="flex flex-col gap-3 bg-sage-light/10 border border-sage-light/35 rounded-2xl p-3.5 mt-1 animate-fade-in">
                   <div className="flex flex-col gap-1.5">
                     <span className="text-[8px] font-black text-sage-dark uppercase">추천 사색 유형</span>
@@ -1427,12 +1550,16 @@ export default function PersonalBookshelfPage() {
                       value={editRecommendReason}
                       onChange={(e) => setEditRecommendReason(e.target.value)}
                       placeholder="이 책을 함께 읽고 싶은 이유나 짤막한 사색 구절을 적어주세요."
-                      className="w-full bg-background border border-card-border rounded-xl px-3 py-2 text-[10px] font-semibold h-15 resize-none focus:outline-none focus:border-sage-medium placeholder:text-foreground/35 text-foreground"
+                      className="w-full bg-background border border-card-border rounded-xl px-3 py-2 text-[10px] font-semibold h-15 resize-none focus:outline-none focus:border-sage-medium placeholder:text-foreground/35 text-foreground leading-relaxed"
                       maxLength={150}
                       required={editIsRecommended}
                     />
                   </div>
                 </div>
+              ) : (
+                <p className="text-[9.5px] text-foreground/35 font-medium text-center py-4">
+                  추천을 켜면 모임의 다음 책 후보방에 자동으로 등록됩니다.
+                </p>
               )}
             </div>
 
@@ -1441,7 +1568,7 @@ export default function PersonalBookshelfPage() {
               <button 
                 type="button"
                 onClick={() => {
-                  setIsEditOpen(false);
+                  setIsRecommendEditOpen(false);
                   setActiveMenuBook(null);
                 }}
                 className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
@@ -1452,7 +1579,7 @@ export default function PersonalBookshelfPage() {
                 type="submit"
                 className="flex-1 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs cursor-pointer"
               >
-                저장하기
+                설정 저장
               </button>
             </div>
           </form>
