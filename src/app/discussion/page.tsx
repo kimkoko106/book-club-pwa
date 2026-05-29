@@ -264,20 +264,20 @@ export default function DiscussionPage() {
         {/* 🗺️ 상단 진행바 UI */}
         <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs">
           <div className="flex justify-between items-center text-[9.5px] font-black text-foreground/40 pb-1.5 border-b border-card-border/40 uppercase tracking-wider">
-            <span>독서 모임 여정</span>
-            <span className="text-sage-dark font-black">
-              {discussionStage === 'reading' && '읽기 단계: 조용한 몰입'}
-              {discussionStage === 'question_collecting' && '질문 정제: 사색 확장'}
-              {discussionStage === 'discussion' && '토론 단계: 활발한 대화'}
-              {discussionStage === 'archiving' && '결산 단계: 감정 정리와 회고'}
+            <span>함께 책 읽는 여정 🗺️</span>
+            <span className="text-sage-dark font-black tracking-normal">
+              {discussionStage === 'reading' && '천천히 책 속으로 들어가는 시간 🌲'}
+              {discussionStage === 'question_collecting' && '질문이 자라나는 시간 🌱'}
+              {discussionStage === 'discussion' && '생각을 나누는 시간 💬'}
+              {discussionStage === 'archiving' && '이번 독서를 마음에 남기는 시간 ✨'}
             </span>
           </div>
 
           <div className="flex items-center justify-between relative mt-2 px-1">
-            {/* 연결 선 */}
-            <div className="absolute top-3.5 left-6 right-6 h-0.5 bg-card-border/70 z-0" />
+            {/* 연결 선 (다이어리 감성 점선) */}
+            <div className="absolute top-[17px] left-7 right-7 border-t border-dashed border-card-border/90 z-0" />
             <div 
-              className="absolute top-3.5 left-6 h-0.5 bg-sage-medium transition-all duration-300 z-0"
+              className="absolute top-[17px] left-7 border-t border-dashed border-sage-medium transition-all duration-300 z-0"
               style={{
                 width: 
                   discussionStage === 'reading' ? '0%' :
@@ -287,27 +287,36 @@ export default function DiscussionPage() {
             />
 
             {[
-              { key: 'reading', label: '📖 읽기', index: 0 },
-              { key: 'question_collecting', label: '⏳ 질문', index: 1 },
-              { key: 'discussion', label: '🔥 토론', index: 2 },
-              { key: 'archiving', label: '🌙 결산', index: 3 }
+              { key: 'reading', label: '책 읽기', emoji: '📖', index: 0 },
+              { key: 'question_collecting', label: '질문 수집', emoji: '🌱', index: 1 },
+              { key: 'discussion', label: '생각 나누기', emoji: '💬', index: 2 },
+              { key: 'archiving', label: '결산 회고', emoji: '🌙', index: 3 }
             ].map((step, idx) => {
               const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(discussionStage);
               const isActive = step.key === discussionStage;
               const isCompleted = idx < currentIdx;
 
-              let statusBg = 'bg-card-bg border-card-border text-foreground/30';
-              if (isActive) statusBg = 'bg-sage-medium border-sage-medium text-white shadow-xs ring-4 ring-sage-light/40 scale-105';
-              if (isCompleted) statusBg = 'bg-sage-light/75 border-sage-medium text-sage-dark opacity-60';
+              let statusBg = 'bg-card-bg border-card-border/70 text-foreground/30 opacity-40';
+              let displayContent = step.emoji;
+
+              if (isActive) {
+                // 현재 활성화 단계: 둥글고 귀여운 스티커 느낌, 세이지그린 톤 강조
+                statusBg = 'bg-sage-light border-sage-medium text-sage-dark scale-110 shadow-xs ring-4 ring-sage-light/50 font-black';
+              } else if (isCompleted) {
+                // 완료 단계: 은은하고 따뜻하게 스탬프를 찍은 듯한 완료 빛(✨) 표시
+                statusBg = 'bg-sage-medium/10 border-sage-medium/30 text-sage-medium';
+                displayContent = '✨';
+              }
 
               return (
-                <div key={step.key} className="flex flex-col items-center gap-1.5 z-10 select-none">
-                  <div className={`w-7 h-7 rounded-full border flex justify-center items-center text-[9px] font-black transition-all ${statusBg}`}>
-                    {idx + 1}
+                <div key={step.key} className="flex flex-col items-center gap-2 z-10 select-none">
+                  {/* 말랑한 느낌을 살린 둥근 스티커 모양 노드 */}
+                  <div className={`w-8.5 h-8.5 rounded-2xl border flex justify-center items-center text-sm transition-all duration-300 ${statusBg}`}>
+                    {displayContent}
                   </div>
-                  <span className={`text-[8.5px] font-black transition-colors ${
-                    isActive ? 'text-sage-dark font-extrabold' :
-                    isCompleted ? 'text-sage-medium/70' : 'text-foreground/35'
+                  <span className={`text-[9px] font-bold transition-colors ${
+                    isActive ? 'text-sage-dark font-black' :
+                    isCompleted ? 'text-sage-medium/80' : 'text-foreground/35'
                   }`}>
                     {step.label}
                   </span>
