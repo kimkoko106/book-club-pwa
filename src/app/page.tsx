@@ -17,6 +17,7 @@ export default function HomePage() {
   const [membersProgress, setMembersProgress] = useState<UserBookProgress[]>([]);
   const [questionCount, setQuestionCount] = useState<number>(8);
   const [isLoading, setIsLoading] = useState(true);
+  const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('question_collecting');
   const router = useRouter();
 
   // 데이터 로드 함수 정의
@@ -62,6 +63,14 @@ export default function HomePage() {
           const club = myClubs[0];
           setActiveClub(club);
           await loadClubData(user.id, club.id);
+
+          // 로컬스토리지 설정 단계를 읽어와 동기화
+          const localStage = localStorage.getItem(`bookclub_mock_club_stage_${club.id}`);
+          if (localStage === 'reading' || localStage === 'question_collecting' || localStage === 'discussion' || localStage === 'archiving') {
+            setDiscussionStage(localStage as any);
+          } else {
+            setDiscussionStage('question_collecting');
+          }
         } else {
           setActiveClub(null);
         }
@@ -212,24 +221,65 @@ export default function HomePage() {
                 </div>
               </div>
 
-              {/* 4단계 배지 흐름 맵 */}
-              <div className="flex justify-between items-center relative mt-1">
-                <div className="absolute left-6 right-6 top-3 h-0.5 bg-sage-light -z-10" />
-                
-                {workflowSteps.map((step, idx) => (
-                  <div key={idx} className="flex flex-col items-center gap-1.5 flex-1">
-                    <div className={`w-6.5 h-6.5 rounded-full border-2 flex justify-center items-center text-[10px] font-black transition-all ${
-                      step.active 
-                        ? 'border-sage-dark bg-sage-medium text-white scale-110 shadow-sm' 
-                        : 'border-sage-light bg-card-bg text-sage-medium/50'
-                    }`}>
-                      {idx + 1}
-                    </div>
-                    <span className={`text-[10px] font-bold ${
-                      step.active ? 'text-sage-dark' : 'text-foreground/45'
-                    }`}>{step.label}</span>
-                  </div>
-                ))}
+              {/* 홈 화면용 압축형 감성 진행바 UI */}
+              <div className="flex flex-col gap-2.5 mt-2 bg-sage-light/10 border border-card-border/40 rounded-xl p-3">
+                <div className="flex justify-between items-center text-[9.5px]">
+                  <span className="font-extrabold text-foreground/45">함께 책 읽는 여정 🗺️</span>
+                  <span className="text-sage-dark font-black tracking-normal">
+                    {discussionStage === 'reading' && '천천히 책 속으로 들어가는 시간 📖'}
+                    {discussionStage === 'question_collecting' && '질문이 자라나는 시간 🌱'}
+                    {discussionStage === 'discussion' && '생각을 나누는 시간 💬'}
+                    {discussionStage === 'archiving' && '이번 독서를 마음에 남기는 시간 🌙'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between relative px-2 py-1 mt-1">
+                  {/* 연결 선 (다이어리 감성 얇은 점선) */}
+                  <div className="absolute top-[13px] left-6 right-6 border-t border-dashed border-card-border/80 z-0" />
+                  <div 
+                    className="absolute top-[13px] left-6 border-t border-dashed border-sage-medium/70 transition-all duration-300 z-0"
+                    style={{
+                      width: 
+                        discussionStage === 'reading' ? '0%' :
+                        discussionStage === 'question_collecting' ? '33%' :
+                        discussionStage === 'discussion' ? '66%' : '100%'
+                    }}
+                  />
+
+                  {[
+                    { key: 'reading', label: '책 읽기', emoji: '📖' },
+                    { key: 'question_collecting', label: '질문 수집', emoji: '🌱' },
+                    { key: 'discussion', label: '생각 나누기', emoji: '💬' },
+                    { key: 'archiving', label: '결산 회고', emoji: '🌙' }
+                  ].map((step, idx) => {
+                    const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(discussionStage);
+                    const isActive = step.key === discussionStage;
+                    const isCompleted = idx < currentIdx;
+
+                    let statusBg = 'bg-card-bg border-card-border/60 text-foreground/30 opacity-40';
+                    let displayContent = step.emoji;
+
+                    if (isActive) {
+                      statusBg = 'bg-sage-light border-sage-medium text-sage-dark scale-105 shadow-xs ring-2 ring-sage-light/50 font-black';
+                    } else if (isCompleted) {
+                      statusBg = 'bg-sage-medium/10 border-sage-medium/30 text-sage-medium';
+                      displayContent = '✨';
+                    }
+
+                    return (
+                      <div key={step.key} className="flex flex-col items-center gap-1 z-10 select-none">
+                        {/* 더 콤팩트한 w-6.5 h-6.5 노드 */}
+                        <div className={`w-6.5 h-6.5 rounded-xl border flex justify-center items-center text-xs transition-all duration-300 ${statusBg}`}>
+                          {displayContent}
+                        </div>
+                        <span className={`text-[8px] font-bold ${
+                          isActive ? 'text-sage-dark font-black' :
+                          isCompleted ? 'text-sage-medium/70' : 'text-foreground/35'
+                        }`}>{step.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
 

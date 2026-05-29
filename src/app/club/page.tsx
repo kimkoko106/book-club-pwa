@@ -334,40 +334,62 @@ export default function ClubHubPage() {
 
                 <div className="h-px bg-card-border" />
 
-                {/* 독서 흐름 4단계 수평 인디케이터 */}
-                <div className="flex justify-between items-center relative mt-1 px-1">
-                  <div className="absolute left-6 right-6 top-3 h-0.5 bg-sage-light -z-10" />
-                  
-                  {workflowSteps.map((step, idx) => (
-                    <div key={idx} className="flex flex-col items-center gap-1">
-                      <div className={`w-6 h-6 rounded-full border-2 flex justify-center items-center text-[9px] font-black transition-all ${
-                        step.active 
-                          ? 'border-sage-dark bg-sage-medium text-white shadow-sm' 
-                          : 'border-sage-light bg-card-bg text-sage-medium/40'
-                      }`}>
-                        {idx + 1}
-                      </div>
-                      <span className={`text-[9px] font-extrabold ${
-                        step.active ? 'text-sage-dark font-black' : 'text-foreground/45'
-                      }`}>{step.label}</span>
-                    </div>
-                  ))}
-                </div>
+                {/* 독서 흐름 4단계 수평 인디케이터 (일정 정보 포함 감성형) */}
+                <div className="flex justify-between items-center relative mt-2 px-1">
+                  {/* 연결 선 (다이어리 감성 점선) */}
+                  <div className="absolute top-[17px] left-7 right-7 border-t border-dashed border-card-border/90 z-0" />
+                  <div 
+                    className="absolute top-[17px] left-7 border-t border-dashed border-sage-medium transition-all duration-300 z-0"
+                    style={{
+                      width: 
+                        stage === 'reading' ? '0%' :
+                        stage === 'question_collecting' ? '33%' :
+                        stage === 'discussion' ? '66%' : '100%'
+                    }}
+                  />
 
-                {/* 자동 계산된 일정 3단 콤팩트 칩 */}
-                <div className="grid grid-cols-3 gap-1.5 mt-3.5 bg-background/60 border border-card-border/50 rounded-xl p-2 text-center shadow-xs animate-fade-in">
-                  <div className="flex flex-col text-center">
-                    <span className="text-[7.5px] font-black text-foreground/40 leading-none">1. 몰입</span>
-                    <span className="text-[8px] font-bold text-foreground/50 mt-0.5">{timeline.reading}</span>
-                  </div>
-                  <div className="flex flex-col border-x border-card-border/60 text-center">
-                    <span className="text-[7.5px] font-black text-foreground/40 leading-none">2. 정제</span>
-                    <span className="text-[8px] font-bold text-foreground/50 mt-0.5">{timeline.question}</span>
-                  </div>
-                  <div className="flex flex-col text-center">
-                    <span className="text-[7.5px] font-black text-foreground/40 leading-none">3. 나눔</span>
-                    <span className="text-[8px] font-bold text-foreground/50 mt-0.5">{timeline.discussion}</span>
-                  </div>
+                  {[
+                    { key: 'reading', label: '책 읽기', emoji: '📖', date: timeline.reading },
+                    { key: 'question_collecting', label: '질문 수집', emoji: '🌱', date: timeline.question },
+                    { key: 'discussion', label: '생각 나누기', emoji: '💬', date: timeline.discussion },
+                    { key: 'archiving', label: '결산 회고', emoji: '🌙', date: '독서 마무리' }
+                  ].map((step, idx) => {
+                    const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(stage);
+                    const isActive = step.key === stage;
+                    const isCompleted = idx < currentIdx;
+
+                    let statusBg = 'bg-card-bg border-card-border/70 text-foreground/30 opacity-40';
+                    let displayContent = step.emoji;
+
+                    if (isActive) {
+                      // 현재 활성화 단계: 둥글고 귀여운 스티커 느낌, 세이지그린 톤 강조
+                      statusBg = 'bg-sage-light border-sage-medium text-sage-dark scale-110 shadow-xs ring-4 ring-sage-light/50 font-black';
+                    } else if (isCompleted) {
+                      // 완료 단계: 은은하고 따뜻하게 스냅프를 찍은 듯한 완료 빛(✨) 표시
+                      statusBg = 'bg-sage-medium/10 border-sage-medium/30 text-sage-medium';
+                      displayContent = '✨';
+                    }
+
+                    return (
+                      <div key={step.key} className="flex flex-col items-center gap-1.5 z-10 select-none flex-1">
+                        {/* 말랑한 느낌을 살린 둥근 스티커 모양 노드 */}
+                        <div className={`w-8.5 h-8.5 rounded-2xl border flex justify-center items-center text-sm transition-all duration-300 ${statusBg}`}>
+                          {displayContent}
+                        </div>
+                        <div className="flex flex-col items-center text-center">
+                          <span className={`text-[9px] font-bold transition-colors leading-tight ${
+                            isActive ? 'text-sage-dark font-black' :
+                            isCompleted ? 'text-sage-medium/80' : 'text-foreground/35'
+                          }`}>
+                            {step.label}
+                          </span>
+                          <span className="text-[7.5px] font-medium text-foreground/35 mt-0.5 tracking-tighter">
+                            {step.date}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
