@@ -1228,7 +1228,7 @@ export default function PersonalBookshelfPage() {
           onClick={() => setIsMenuOpen(false)}
         >
           <div 
-            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 animate-slide-up"
+            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl px-5 pt-5 pb-12 shadow-2xl flex flex-col gap-4 max-h-[80vh] overflow-y-auto animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center pb-2 border-b border-card-border/30">
