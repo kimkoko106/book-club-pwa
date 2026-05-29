@@ -1262,16 +1262,16 @@ export default function PersonalBookshelfPage() {
               </button>
 
               {currentClubBook && currentClubBook.title === activeMenuBook.title && currentClubBook.author === activeMenuBook.author ? (
-                <div className="flex flex-col gap-1 mt-1">
-                  <button
-                    disabled
-                    className="w-full text-left py-3 px-4.5 bg-background border border-card-border/30 rounded-xl text-[10.5px] font-bold text-foreground/30 flex items-center justify-between cursor-not-allowed opacity-50"
-                  >
-                    <span>🗑 내 책장에서 삭제</span>
-                    <span className="text-[8.5px] font-bold opacity-60">삭제 불가</span>
-                  </button>
-                  <p className="text-[8.5px] text-foreground/45 font-semibold text-center mt-1">
-                    ℹ️ 현재 모임 공식 공유 도서로 독서가 진행 중인 책입니다.
+                <div className="flex flex-col gap-1.5 mt-1 bg-background/40 border border-card-border/50 rounded-xl p-3.5">
+                  <div className="flex items-start gap-3 opacity-30 select-none">
+                    <span className="text-sm mt-0.5">🗑</span>
+                    <div className="flex flex-col items-start gap-0.5">
+                      <span className="text-[10.5px] font-black text-foreground">내 책장에서 삭제</span>
+                      <span className="text-[8px] text-foreground/70 font-semibold">책장과 메모에서 제거됩니다</span>
+                    </div>
+                  </div>
+                  <p className="text-[8px] text-red-500/80 font-black text-center mt-1 pt-1.5 border-t border-card-border/30">
+                    ℹ️ 현재 모임 공유책으로 사용 중이라 삭제할 수 없어요.
                   </p>
                 </div>
               ) : (
@@ -1280,10 +1280,13 @@ export default function PersonalBookshelfPage() {
                     setIsMenuOpen(false);
                     setIsDeleteOpen(true);
                   }}
-                  className="w-full text-left py-3 px-4.5 bg-background hover:bg-red-50 border border-red-200/30 rounded-xl text-[10.5px] font-bold text-red-500 cursor-pointer transition-all flex items-center justify-between"
+                  className="w-full text-left py-3 px-4.5 bg-red-50/10 hover:bg-red-50/30 border border-red-200/20 rounded-xl text-red-500 hover:text-red-600 cursor-pointer transition-all flex items-start gap-3"
                 >
-                  <span>🗑 내 책장에서 삭제</span>
-                  <span className="text-[8.5px] font-bold opacity-60">서재 정리</span>
+                  <span className="text-sm mt-0.5 select-none">🗑</span>
+                  <div className="flex flex-col items-start gap-0.5">
+                    <span className="text-[10.5px] font-black">내 책장에서 삭제</span>
+                    <span className="text-[8px] text-red-400 font-semibold">책장과 메모에서 제거됩니다</span>
+                  </div>
                 </button>
               )}
             </div>
