@@ -391,12 +391,24 @@ export default function NextBookCandidatePage() {
 
               {/* 책 상단 기본 정보 */}
               <div className="flex gap-3.5 items-start">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img 
-                  src={cand.cover_url} 
-                  alt="표지" 
-                  className="w-12 h-17 rounded object-cover border border-card-border shadow-xs flex-shrink-0"
-                />
+                {cand.cover_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img 
+                    src={cand.cover_url} 
+                    alt="표지" 
+                    className="w-12 h-17 rounded object-cover border border-card-border shadow-xs flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-12 h-17 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border/70 flex flex-col justify-between py-2 px-1 shadow-xs flex-shrink-0 text-center select-none relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-1.5 h-full bg-sage-dark/10" />
+                    <span className="text-[9.5px] font-black text-sage-dark leading-tight line-clamp-2 w-full mt-0.5 px-0.5">
+                      {cand.title}
+                    </span>
+                    <span className="text-[7.5px] font-extrabold text-sage-medium/90 truncate w-full px-0.5">
+                      {cand.author || '지은이 없음'}
+                    </span>
+                  </div>
+                )}
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-wrap gap-1 items-center">
                     {cand.type === 'read' ? (
@@ -511,12 +523,19 @@ export default function NextBookCandidatePage() {
                       onClick={() => setSelectedBook(bookItem)}
                       className="bg-background border border-card-border/70 hover:border-sage-medium rounded-xl p-2 flex gap-3 items-center cursor-pointer transition-all duration-200"
                     >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img 
-                        src={bookItem.cover_url} 
-                        alt="표지" 
-                        className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
-                      />
+                      {bookItem.cover_url ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img 
+                          src={bookItem.cover_url} 
+                          alt="표지" 
+                          className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-7 h-10 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[9px] select-none flex-shrink-0 relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
+                          {bookItem.title.charAt(0)}
+                        </div>
+                      )}
                       <div className="flex-grow min-w-0">
                         <h4 className="text-[10px] font-black text-foreground truncate">{bookItem.title}</h4>
                         <span className="text-[9px] text-foreground/45 font-medium truncate leading-none mt-0.5">{bookItem.author}</span>
@@ -530,12 +549,19 @@ export default function NextBookCandidatePage() {
               /* 선택된 책 노출 */
               <div className="bg-background border border-card-border rounded-xl p-3 flex justify-between items-center gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img 
-                    src={selectedBook.cover_url} 
-                    alt="표지" 
-                    className="w-8 h-11 rounded object-cover border border-card-border"
-                  />
+                  {selectedBook.cover_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img 
+                      src={selectedBook.cover_url} 
+                      alt="표지" 
+                      className="w-8 h-11 rounded object-cover border border-card-border"
+                    />
+                  ) : (
+                    <div className="w-8 h-11 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[10px] select-none flex-shrink-0 relative overflow-hidden">
+                      <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
+                      {selectedBook.title.charAt(0)}
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <h4 className="text-[10.5px] font-black text-foreground truncate">{selectedBook.title}</h4>
                     <p className="text-[9px] text-foreground/45 font-medium truncate">{selectedBook.author}</p>

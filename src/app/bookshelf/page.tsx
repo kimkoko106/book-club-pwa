@@ -16,7 +16,8 @@ import {
   Library,
   ChevronDown,
   ChevronUp,
-  Sparkles
+  Sparkles,
+  MoreHorizontal
 } from 'lucide-react';
 
 interface ShelfBook {
@@ -144,6 +145,27 @@ export default function PersonalBookshelfPage() {
   const [selectedAddBook, setSelectedAddBook] = useState<typeof DUMMY_SEARCH_BOOKS[0] | null>(null);
   const [addBookStatus, setAddBookStatus] = useState<'reading' | 'completed' | 'wish'>('reading');
   const [addBookProgress, setAddBookProgress] = useState(0);
+  const [isDirectInput, setIsDirectInput] = useState(false);
+  const [directTitle, setDirectTitle] = useState('');
+  const [directAuthor, setDirectAuthor] = useState('');
+  const [directCoverUrl, setDirectCoverUrl] = useState('');
+
+  // 책장 정리 및 수정/삭제 팝업용 상태
+  const [activeMenuBook, setActiveMenuBook] = useState<ShelfBook | null>(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [currentClubBook, setCurrentClubBook] = useState<{ title: string; author: string } | null>(null);
+
+  // 책 수정 입력 상태
+  const [editTitle, setEditTitle] = useState('');
+  const [editAuthor, setEditAuthor] = useState('');
+  const [editCoverUrl, setEditCoverUrl] = useState('');
+  const [editStatus, setEditStatus] = useState<'reading' | 'completed' | 'wish'>('reading');
+  const [editProgress, setEditProgress] = useState(0);
+  const [editIsRecommended, setEditIsRecommended] = useState(false);
+  const [editRecommendType, setEditRecommendType] = useState<'read' | 'wish'>('read');
+  const [editRecommendReason, setEditRecommendReason] = useState('');
 
   // 모임 추천 입력 상태
   const [selectedRecommendBook, setSelectedRecommendBook] = useState<ShelfBook | null>(null);
@@ -182,6 +204,16 @@ export default function PersonalBookshelfPage() {
           localStorage.setItem('bookclub_personal_memos', JSON.stringify(INITIAL_MEMOS));
           setMemos(INITIAL_MEMOS);
         }
+
+        // 로컬스토리지 모임 공유책 로드
+        const storedMockBooks = localStorage.getItem('bookclub_mock_books');
+        if (storedMockBooks) {
+          const books = JSON.parse(storedMockBooks);
+          const clubBook = books.find((b: any) => b.club_id === 'club-1');
+          if (clubBook) {
+            setCurrentClubBook({ title: clubBook.title, author: clubBook.author });
+          }
+        }
       } catch (err) {
         console.error('개인 책장 로딩 오류:', err);
       }
@@ -202,20 +234,178 @@ export default function PersonalBookshelfPage() {
       ));
     }
   };
+  
+  // 파일 이미지 업로드 핸들러 (base64 변환)
+  const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 1024 * 1024) {
+        alert("이미지 파일 크기가 너무 큽니다. 1MB 이하의 이미지를 업로드해 주세요.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setDirectCoverUrl(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  // 책 수정 모달 오픈 및 데이터 세팅
+  const handleOpenEdit = (book: ShelfBook) => {
+    setActiveMenuBook(book);
+    setEditTitle(book.title);
+    setEditAuthor(book.author);
+    setEditCoverUrl(book.cover_url || '');
+    setEditStatus(book.status);
+    setEditProgress(book.progress || 0);
+    setEditIsRecommended(book.is_recommended);
+    
+    // 추천 세부 정보 로드
+    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
+    if (storedCandidatesStr) {
+      const candidates = JSON.parse(storedCandidatesStr);
+      const matched = candidates.find((c: any) => c.title === book.title && c.author === book.author);
+      if (matched) {
+        setEditRecommendType(matched.type);
+        setEditRecommendReason(matched.reason);
+      } else {
+        setEditRecommendType('read');
+        setEditRecommendReason('');
+      }
+    } else {
+      setEditRecommendType('read');
+      setEditRecommendReason('');
+    }
+    
+    setIsMenuOpen(false);
+    setIsEditOpen(true);
+  };
+
+  // 도서 수정 처리 저장
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeMenuBook) return;
+    if (!editTitle.trim()) {
+      alert('책 제목을 입력해 주세요.');
+      return;
+    }
+
+    // 1. 책장 스토리지 업데이트
+    const updatedShelf = shelfBooks.map(b => {
+      if (b.id === activeMenuBook.id) {
+        return {
+          ...b,
+          title: editTitle.trim(),
+          author: editAuthor.trim() || '지은이 없음',
+          cover_url: editCoverUrl.trim(),
+          status: editStatus,
+          progress: editStatus === 'reading' ? Number(editProgress) : undefined,
+          completed_date: editStatus === 'completed' ? (b.completed_date || new Date().toISOString().split('T')[0].replace(/-/g, '.')) : undefined,
+          is_recommended: editIsRecommended
+        };
+      }
+      return b;
+    });
+    setShelfBooks(updatedShelf);
+    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+
+    // 2. 모임 추천 연동 처리
+    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
+    let candidates = storedCandidatesStr ? JSON.parse(storedCandidatesStr) : [];
+    
+    if (editIsRecommended) {
+      const matchedIndex = candidates.findIndex((c: any) => c.title === activeMenuBook.title && c.author === activeMenuBook.author);
+      const newCandidate = {
+        id: matchedIndex > -1 ? candidates[matchedIndex].id : `cand-${Date.now()}`,
+        title: editTitle.trim(),
+        author: editAuthor.trim() || '지은이 없음',
+        cover_url: editCoverUrl.trim(),
+        total_pages: 300,
+        recommended_by: currentUser?.username || '익명',
+        type: editRecommendType,
+        reason: editRecommendReason.trim() || '함께 나누고 싶은 도서입니다.',
+        reactions: matchedIndex > -1 ? candidates[matchedIndex].reactions : { curious: 0, with_you: 0 },
+        created_at: matchedIndex > -1 ? candidates[matchedIndex].created_at : new Date().toISOString()
+      };
+
+      if (matchedIndex > -1) {
+        candidates[matchedIndex] = newCandidate;
+      } else {
+        candidates = [newCandidate, ...candidates];
+      }
+    } else {
+      candidates = candidates.filter((c: any) => !(c.title === activeMenuBook.title && c.author === activeMenuBook.author));
+    }
+    localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(candidates));
+
+    setIsEditOpen(false);
+    setActiveMenuBook(null);
+    alert(`[${editTitle}] 도서가 서재에 아름답게 다시 꽂혔습니다.`);
+  };
+
+  // 도서 삭제 처리
+  const handleDeleteBook = () => {
+    if (!activeMenuBook) return;
+
+    // 1. 책장에서 제외
+    const updatedShelf = shelfBooks.filter(b => b.id !== activeMenuBook.id);
+    setShelfBooks(updatedShelf);
+    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+
+    // 2. 연관 메모 일괄 제거
+    const storedMemos = localStorage.getItem('bookclub_personal_memos');
+    if (storedMemos) {
+      const memosList = JSON.parse(storedMemos);
+      const updatedMemos = memosList.filter((m: any) => m.bookId !== activeMenuBook.id);
+      setMemos(updatedMemos);
+      localStorage.setItem('bookclub_personal_memos', JSON.stringify(updatedMemos));
+    }
+
+    // 3. 모임 추천 기록도 제거
+    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
+    if (storedCandidatesStr) {
+      const candidates = JSON.parse(storedCandidatesStr);
+      const updatedCandidates = candidates.filter((c: any) => !(c.title === activeMenuBook.title && c.author === activeMenuBook.author));
+      localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(updatedCandidates));
+    }
+
+    setIsDeleteOpen(false);
+    setActiveMenuBook(null);
+    alert('책장에서 도서와 사색의 흔적들을 조용히 정리했습니다.');
+  };
 
   // 3. 내 책장에 새 도서 등록
   const handleAddBookToShelf = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedAddBook) {
-      alert('등록할 책을 선택해 주세요.');
-      return;
+    
+    let title = '';
+    let author = '';
+    let cover_url = '';
+
+    if (isDirectInput) {
+      if (!directTitle.trim()) {
+        alert('책 제목을 입력해 주세요.');
+        return;
+      }
+      title = directTitle.trim();
+      author = directAuthor.trim() || '지은이 없음';
+      cover_url = directCoverUrl.trim();
+    } else {
+      if (!selectedAddBook) {
+        alert('등록할 책을 선택해 주세요.');
+        return;
+      }
+      title = selectedAddBook.title;
+      author = selectedAddBook.author;
+      cover_url = selectedAddBook.cover_url;
     }
 
     const newBook: ShelfBook = {
       id: `shelf-${Date.now()}`,
-      title: selectedAddBook.title,
-      author: selectedAddBook.author,
-      cover_url: selectedAddBook.cover_url,
+      title,
+      author,
+      cover_url,
       status: addBookStatus,
       progress: addBookStatus === 'reading' ? Number(addBookProgress) : undefined,
       completed_date: addBookStatus === 'completed' ? new Date().toISOString().split('T')[0].replace(/-/g, '.') : undefined,
@@ -231,6 +421,10 @@ export default function PersonalBookshelfPage() {
     setSearchQuery('');
     setAddBookStatus('reading');
     setAddBookProgress(0);
+    setIsDirectInput(false);
+    setDirectTitle('');
+    setDirectAuthor('');
+    setDirectCoverUrl('');
     setIsAddBookModalOpen(false);
     alert(`[${newBook.title}] 도서가 서재에 안전하게 꽂혔습니다.`);
   };
@@ -427,17 +621,42 @@ export default function PersonalBookshelfPage() {
                     </div>
                   )}
 
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img 
-                    src={book.cover_url} 
-                    alt="책표지" 
-                    className="w-11 h-15 rounded object-cover border border-card-border shadow-xs flex-shrink-0"
-                  />
+                  {book.cover_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img 
+                      src={book.cover_url} 
+                      alt="책표지" 
+                      className="w-11 h-15 rounded object-cover border border-card-border shadow-xs flex-shrink-0"
+                    />
+                  ) : (
+                    <div className="w-11 h-15 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border/70 flex flex-col justify-between py-2 px-1.5 shadow-xs flex-shrink-0 text-center select-none relative overflow-hidden">
+                      <div className="absolute top-0 left-0 w-1 h-full bg-sage-dark/10" />
+                      <span className="text-[9px] font-black text-sage-dark leading-tight line-clamp-2 w-full mt-0.5 px-0.5">
+                        {book.title}
+                      </span>
+                      <span className="text-[7.5px] font-extrabold text-sage-medium/90 truncate w-full px-0.5">
+                        {book.author || '지은이 없음'}
+                      </span>
+                    </div>
+                  )}
 
                   <div className="flex-1 min-w-0 flex flex-col justify-between h-15 pr-6">
-                    <div className="min-w-0">
-                      <h4 className="text-[11px] font-black text-foreground truncate">{book.title}</h4>
+                    <div className="min-w-0 relative">
+                      <h4 className="text-[11px] font-black text-foreground truncate pr-4">{book.title}</h4>
                       <p className="text-[9.5px] text-foreground/45 font-semibold truncate mt-0.5">{book.author}</p>
+                      
+                      {/* 더보기 버튼 */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveMenuBook(book);
+                          setIsMenuOpen(true);
+                        }}
+                        className="absolute -top-1.5 -right-5 w-6 h-6 rounded-full hover:bg-foreground/5 flex justify-center items-center text-foreground/40 hover:text-foreground/70 cursor-pointer transition-all"
+                        title="책장 정리"
+                      >
+                        <MoreHorizontal size={13} />
+                      </button>
                     </div>
 
                     <div className="flex flex-wrap gap-1.5 items-center text-[8.5px] font-bold text-foreground/40 mt-1">
@@ -582,6 +801,10 @@ export default function PersonalBookshelfPage() {
                   setSelectedAddBook(null);
                   setSearchQuery('');
                   setAddBookStatus('reading');
+                  setIsDirectInput(false);
+                  setDirectTitle('');
+                  setDirectAuthor('');
+                  setDirectCoverUrl('');
                 }}
                 className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer"
               >
@@ -589,8 +812,8 @@ export default function PersonalBookshelfPage() {
               </button>
             </div>
 
-            {/* Step 1: 책 검색 선택 */}
-            {!selectedAddBook ? (
+            {/* Step 1: 책 검색 선택 또는 직접 등록 */}
+            {!selectedAddBook && !isDirectInput && (
               <div className="flex flex-col gap-3">
                 <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest font-extrabold">도서 찾기</span>
                 <div className="relative">
@@ -599,7 +822,7 @@ export default function PersonalBookshelfPage() {
                     value={searchQuery}
                     onChange={handleSearchBook}
                     placeholder="추천하고 싶은 도서명 또는 작가 입력..."
-                    className="w-full bg-background border border-card-border rounded-xl pl-9 pr-4 py-2 text-xs font-semibold focus:outline-none focus:border-sage-medium placeholder:text-foreground/30"
+                    className="w-full bg-background border border-card-border rounded-xl pl-9 pr-4 py-2 text-xs font-semibold focus:outline-none focus:border-sage-medium placeholder:text-foreground/30 text-foreground"
                   />
                   <Search size={13} className="absolute left-3.5 top-3 text-foreground/35" />
                 </div>
@@ -625,17 +848,128 @@ export default function PersonalBookshelfPage() {
                     </div>
                   ))}
                 </div>
+
+                {/* 찾는 책이 없나요? 직접 등록하기 버튼 */}
+                <div className="flex flex-col items-center gap-1.5 pt-2 border-t border-card-border/30">
+                  <span className="text-[8px] text-foreground/40 font-bold">찾는 책이 목록에 없나요?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDirectInput(true);
+                      setSelectedAddBook(null);
+                    }}
+                    className="px-3 py-1 bg-sage-light/10 border border-sage-light text-sage-dark text-[9px] font-black rounded-lg hover:bg-sage-light/30 transition-all cursor-pointer shadow-xs"
+                  >
+                    직접 입력해서 등록하기
+                  </button>
+                </div>
               </div>
-            ) : (
-              /* 선택된 책 노출 */
+            )}
+
+            {/* 직접 입력 폼 */}
+            {isDirectInput && (
+              <div className="flex flex-col gap-3 animate-fade-in bg-background/30 p-3.5 border border-card-border rounded-2xl">
+                <div className="flex justify-between items-center">
+                  <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">직접 입력 등록</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsDirectInput(false);
+                      setDirectTitle('');
+                      setDirectAuthor('');
+                      setDirectCoverUrl('');
+                    }}
+                    className="text-[9px] text-foreground/40 hover:text-foreground/75 font-bold underline cursor-pointer"
+                  >
+                    도서 검색으로 돌아가기
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">책 제목 *</label>
+                    <input 
+                      type="text"
+                      value={directTitle}
+                      onChange={(e) => setDirectTitle(e.target.value)}
+                      placeholder="도서 제목을 입력해 주세요 (필수)"
+                      className="px-2.5 py-1.5 bg-background border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                      required={isDirectInput}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">지은이 (저자)</label>
+                    <input 
+                      type="text"
+                      value={directAuthor}
+                      onChange={(e) => setDirectAuthor(e.target.value)}
+                      placeholder="저자명을 입력해 주세요 (선택)"
+                      className="px-2.5 py-1.5 bg-background border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">표지 이미지 (선택)</label>
+                    <div className="flex gap-3 items-center mt-1">
+                      {directCoverUrl ? (
+                        <div className="relative w-12 h-16 rounded object-cover border border-card-border shadow-xs flex-shrink-0 overflow-hidden bg-sage-light/10">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={directCoverUrl} alt="미리보기" className="w-full h-full object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => setDirectCoverUrl('')}
+                            className="absolute inset-0 bg-black/40 hover:bg-black/60 flex items-center justify-center text-white transition-all cursor-pointer"
+                            title="이미지 삭제"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="w-12 h-16 rounded border border-dashed border-card-border/80 hover:border-sage-medium bg-background flex flex-col justify-center items-center cursor-pointer transition-all flex-shrink-0 text-foreground/40 hover:text-sage-dark">
+                          <Plus size={14} />
+                          <span className="text-[7.5px] font-extrabold mt-1">업로드</span>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleCoverFileChange}
+                            className="hidden"
+                          />
+                        </label>
+                      )}
+                      <div className="flex-1 flex flex-col gap-1.5">
+                        <span className="text-[8px] text-foreground/40 font-semibold leading-relaxed">
+                          직접 찍은 사진이나 표지 파일(1MB 이하)을 선택해 주세요.
+                        </span>
+                        <input 
+                          type="url"
+                          value={directCoverUrl.startsWith('data:') ? '' : directCoverUrl}
+                          onChange={(e) => setDirectCoverUrl(e.target.value)}
+                          placeholder="또는 이미지 주소(https://...) 입력"
+                          className="px-2.5 py-1 bg-background border border-card-border rounded-lg text-[9.5px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full placeholder:text-foreground/30"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 선택된 책 노출 (검색 결과 선택 시) */}
+            {selectedAddBook && !isDirectInput && (
               <div className="bg-background border border-card-border rounded-xl p-3 flex justify-between items-center gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img 
-                    src={selectedAddBook.cover_url} 
-                    alt="표지" 
-                    className="w-8 h-11 rounded object-cover border border-card-border"
-                  />
+                  {selectedAddBook.cover_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img 
+                      src={selectedAddBook.cover_url} 
+                      alt="표지" 
+                      className="w-8 h-11 rounded object-cover border border-card-border"
+                    />
+                  ) : (
+                    <div className="w-8 h-11 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[10px] select-none flex-shrink-0 relative overflow-hidden">
+                      <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
+                      {selectedAddBook.title.charAt(0)}
+                    </div>
+                  )}
                   <div className="min-w-0">
                     <h4 className="text-[10.5px] font-black text-foreground truncate">{selectedAddBook.title}</h4>
                     <p className="text-[9px] text-foreground/45 font-medium truncate">{selectedAddBook.author}</p>
@@ -753,12 +1087,19 @@ export default function PersonalBookshelfPage() {
 
             {/* 책 정보 */}
             <div className="bg-background border border-card-border rounded-xl p-3 flex gap-3 items-center">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img 
-                src={selectedRecommendBook.cover_url} 
-                alt="책 표지" 
-                className="w-8 h-11 rounded object-cover border border-card-border"
-              />
+              {selectedRecommendBook.cover_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img 
+                  src={selectedRecommendBook.cover_url} 
+                  alt="책 표지" 
+                  className="w-8 h-11 rounded object-cover border border-card-border"
+                />
+              ) : (
+                <div className="w-8 h-11 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[10px] select-none flex-shrink-0 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
+                  {selectedRecommendBook.title.charAt(0)}
+                </div>
+              )}
               <div className="min-w-0">
                 <h4 className="text-[10.5px] font-black text-foreground truncate">{selectedRecommendBook.title}</h4>
                 <p className="text-[9px] text-foreground/45 font-medium truncate">{selectedRecommendBook.author}</p>
@@ -828,6 +1169,343 @@ export default function PersonalBookshelfPage() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 3: 책장 정리 액션 메뉴 Bottom Sheet
+      ========================================== */}
+      {isMenuOpen && activeMenuBook && (
+        <div 
+          className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in"
+          onClick={() => setIsMenuOpen(false)}
+        >
+          <div 
+            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 animate-slide-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center pb-2 border-b border-card-border/30">
+              <div className="flex flex-col">
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">책장 정리</span>
+                <h3 className="text-xs font-black text-foreground mt-0.5 truncate max-w-[280px]">{activeMenuBook.title}</h3>
+              </div>
+              <button 
+                onClick={() => setIsMenuOpen(false)}
+                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 cursor-pointer"
+              >
+                <X size={12} />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => handleOpenEdit(activeMenuBook)}
+                className="w-full text-left py-3 px-4.5 bg-background hover:bg-sage-light/10 border border-card-border/60 rounded-xl text-[10.5px] font-bold text-foreground/80 cursor-pointer transition-all"
+              >
+                ✏ 책 정보 및 모임 추천 수정
+              </button>
+
+              {currentClubBook && currentClubBook.title === activeMenuBook.title && currentClubBook.author === activeMenuBook.author ? (
+                <div className="w-full p-3.5 bg-sage-light/10 border border-sage-light/35 rounded-xl text-[9px] text-sage-dark/80 font-bold flex flex-col gap-0.5 mt-1">
+                  <span>ℹ️ 이 책은 삭제할 수 없습니다.</span>
+                  <span className="text-[8.5px] opacity-75 font-semibold leading-relaxed">현재 모임 공식 공유 도서로 독서가 진행 중인 책입니다.</span>
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    setIsDeleteOpen(true);
+                  }}
+                  className="w-full text-left py-3 px-4.5 bg-background hover:bg-red-50 border border-red-200/30 rounded-xl text-[10.5px] font-bold text-red-500 cursor-pointer transition-all"
+                >
+                  🗑 내 책장에서 삭제하기
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 4: 책 정보 및 모임 추천 수정 Bottom Sheet
+      ========================================== */}
+      {isEditOpen && activeMenuBook && (
+        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
+          <form 
+            onSubmit={handleSaveEdit}
+            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4 max-h-[85vh] overflow-y-auto animate-slide-up"
+          >
+            <div className="flex justify-between items-center">
+              <div className="flex flex-col">
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">책 정보 가꾸기</span>
+                <h3 className="text-xs font-black text-foreground mt-0.5">책 정보 및 추천 수정</h3>
+              </div>
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsEditOpen(false);
+                  setActiveMenuBook(null);
+                }}
+                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer"
+              >
+                <X size={12} />
+              </button>
+            </div>
+
+            {/* 정보 입력 필드 */}
+            <div className="flex flex-col gap-3 bg-background/30 p-3.5 border border-card-border rounded-2xl">
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] font-black text-foreground/45 uppercase">책 제목 *</label>
+                <input 
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="px-2.5 py-1.5 bg-background border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                  required
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] font-black text-foreground/45 uppercase">지은이 (저자)</label>
+                <input 
+                  type="text"
+                  value={editAuthor}
+                  onChange={(e) => setEditAuthor(e.target.value)}
+                  className="px-2.5 py-1.5 bg-background border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                />
+              </div>
+              
+              {/* 이미지 파일 업로드 */}
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] font-black text-foreground/45 uppercase">표지 이미지 (선택)</label>
+                <div className="flex gap-3 items-center mt-1">
+                  {editCoverUrl ? (
+                    <div className="relative w-12 h-16 rounded object-cover border border-card-border shadow-xs flex-shrink-0 overflow-hidden bg-sage-light/10">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={editCoverUrl} alt="미리보기" className="w-full h-full object-cover" />
+                      <button
+                        type="button"
+                        onClick={() => setEditCoverUrl('')}
+                        className="absolute inset-0 bg-black/40 hover:bg-black/60 flex items-center justify-center text-white transition-all cursor-pointer"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="w-12 h-16 rounded border border-dashed border-card-border/80 hover:border-sage-medium bg-background flex flex-col justify-center items-center cursor-pointer transition-all flex-shrink-0 text-foreground/40 hover:text-sage-dark">
+                      <Plus size={14} />
+                      <span className="text-[7.5px] font-extrabold mt-1">업로드</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            if (file.size > 1024 * 1024) {
+                              alert("이미지 파일 크기가 너무 큽니다. 1MB 이하의 이미지를 업로드해 주세요.");
+                              return;
+                            }
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                              setEditCoverUrl(reader.result as string);
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                  <div className="flex-1 flex flex-col gap-1.5">
+                    <span className="text-[8px] text-foreground/40 font-semibold leading-relaxed">
+                      새로운 표지 파일(1MB 이하)을 선택해 주세요.
+                    </span>
+                    <input 
+                      type="url"
+                      value={editCoverUrl.startsWith('data:') ? '' : editCoverUrl}
+                      onChange={(e) => setEditCoverUrl(e.target.value)}
+                      placeholder="또는 이미지 주소(https://...) 입력"
+                      className="px-2.5 py-1 bg-background border border-card-border rounded-lg text-[9.5px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full placeholder:text-foreground/30"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 독서 상태 선택 (Segmented Control) */}
+            <div className="flex flex-col gap-2">
+              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">책을 읽는 현 상태</span>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { value: 'reading', label: '읽는 중' },
+                  { value: 'completed', label: '다 읽음' },
+                  { value: 'wish', label: '읽고 싶음' }
+                ].map(item => (
+                  <button
+                    type="button"
+                    key={item.value}
+                    onClick={() => {
+                      setEditStatus(item.value as any);
+                      if (item.value === 'completed') setEditProgress(100);
+                      else if (item.value === 'wish') setEditProgress(0);
+                    }}
+                    className={`py-2 rounded-xl text-[9.5px] font-black text-center transition-all cursor-pointer ${
+                      editStatus === item.value
+                        ? 'bg-sage-medium text-white shadow-xs'
+                        : 'bg-background border border-card-border text-foreground/55 hover:bg-sage-light/25'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 진행률 (읽는 중 선택 시 노출) */}
+            {editStatus === 'reading' && (
+              <div className="flex flex-col gap-2 animate-fade-in">
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">현재 진행률 (%)</span>
+                <div className="flex items-center gap-3">
+                  <input 
+                    type="range"
+                    min={0}
+                    max={100}
+                    value={editProgress}
+                    onChange={(e) => setEditProgress(Number(e.target.value))}
+                    className="flex-1 accent-sage-medium cursor-pointer"
+                  />
+                  <span className="text-xs font-black text-foreground w-8 text-right">{editProgress}%</span>
+                </div>
+              </div>
+            )}
+
+            {/* 모임 추천 토글 */}
+            <div className="flex flex-col gap-2 border-t border-card-border/30 pt-3">
+              <label className="flex items-center justify-between cursor-pointer py-1">
+                <span className="text-[10px] font-black text-foreground/75">🌲 우리 모임에 이 책을 추천하기</span>
+                <input 
+                  type="checkbox" 
+                  checked={editIsRecommended}
+                  onChange={(e) => setEditIsRecommended(e.target.checked)}
+                  className="w-4 h-4 accent-sage-medium cursor-pointer"
+                />
+              </label>
+
+              {/* 추천 활성화 시 추가 설정 */}
+              {editIsRecommended && (
+                <div className="flex flex-col gap-3 bg-sage-light/10 border border-sage-light/35 rounded-2xl p-3.5 mt-1 animate-fade-in">
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-[8px] font-black text-sage-dark uppercase">추천 사색 유형</span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditRecommendType('read')}
+                        className={`py-1.5 rounded-lg text-[9px] font-black text-center cursor-pointer transition-all ${
+                          editRecommendType === 'read'
+                            ? 'bg-sage-medium text-white shadow-xs'
+                            : 'bg-background border border-card-border text-foreground/50 hover:bg-sage-light/20'
+                        }`}
+                      >
+                        ✓ 읽어봤고 추천해요
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditRecommendType('wish')}
+                        className={`py-1.5 rounded-lg text-[9px] font-black text-center cursor-pointer transition-all ${
+                          editRecommendType === 'wish'
+                            ? 'bg-warm-beige text-white shadow-xs'
+                            : 'bg-background border border-card-border text-foreground/50 hover:bg-warm-beige/10'
+                        }`}
+                      >
+                        📖 같이 읽고 싶어요
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[8px] font-black text-sage-dark uppercase">추천 한마디 (사유)</span>
+                    <textarea 
+                      value={editRecommendReason}
+                      onChange={(e) => setEditRecommendReason(e.target.value)}
+                      placeholder="이 책을 함께 읽고 싶은 이유나 짤막한 사색 구절을 적어주세요."
+                      className="w-full bg-background border border-card-border rounded-xl px-3 py-2 text-[10px] font-semibold h-15 resize-none focus:outline-none focus:border-sage-medium placeholder:text-foreground/35 text-foreground"
+                      maxLength={150}
+                      required={editIsRecommended}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 버튼 영역 */}
+            <div className="flex gap-2.5 mt-2">
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsEditOpen(false);
+                  setActiveMenuBook(null);
+                }}
+                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
+              >
+                취소
+              </button>
+              <button 
+                type="submit"
+                className="flex-1 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs cursor-pointer"
+              >
+                저장하기
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 5: 책장에서 삭제 확인 팝업
+      ========================================== */}
+      {isDeleteOpen && activeMenuBook && (
+        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-center justify-center z-50 p-6 animate-fade-in">
+          <div className="bg-card-bg border border-card-border w-full max-w-[340px] rounded-2xl p-5 shadow-2xl flex flex-col gap-4 animate-scale-up">
+            <div className="text-center flex flex-col gap-1.5">
+              <h4 className="text-xs font-black text-foreground">내 책장에서 삭제할까요?</h4>
+              <p className="text-[10px] text-foreground/45 font-semibold leading-relaxed">
+                이 책에 기록했던 모든 사색 문장 일기와<br />모임 추천 내역도 함께 정리되어 사라집니다.
+              </p>
+            </div>
+
+            <div className="bg-sage-light/10 border border-card-border/40 rounded-xl p-3 flex gap-2.5 items-center">
+              {activeMenuBook.cover_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={activeMenuBook.cover_url} alt="책" className="w-7 h-10 rounded object-cover border border-card-border" />
+              ) : (
+                <div className="w-7 h-10 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[9px] select-none flex-shrink-0 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
+                  {activeMenuBook.title.charAt(0)}
+                </div>
+              )}
+              <div className="min-w-0">
+                <h5 className="text-[10px] font-black text-foreground truncate">{activeMenuBook.title}</h5>
+                <span className="text-[8.5px] text-foreground/45 font-medium truncate">{activeMenuBook.author}</span>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button 
+                onClick={() => {
+                  setIsDeleteOpen(false);
+                  setActiveMenuBook(null);
+                }}
+                className="flex-1 py-2 border border-card-border text-foreground/60 rounded-xl text-[9.5px] font-black hover:bg-foreground/5 cursor-pointer"
+              >
+                취소
+              </button>
+              <button 
+                onClick={handleDeleteBook}
+                className="flex-1 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-[9.5px] font-black shadow-xs cursor-pointer"
+              >
+                삭제하기
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
