@@ -1648,7 +1648,9 @@ export default function PersonalBookshelfPage() {
       )}
 
       {/* 하단 내비게이션 바 */}
-      <Navigation currentUser={currentUser} onLogout={() => {}} />
+      {!isMenuOpen && !isEditOpen && !isRecommendEditOpen && !isDeleteOpen && !isAddBookModalOpen && (
+        <Navigation currentUser={currentUser} onLogout={() => {}} />
+      )}
     </div>
   );
 }
