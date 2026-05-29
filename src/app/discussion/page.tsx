@@ -215,7 +215,7 @@ export default function DiscussionPage() {
               <ArrowLeft size={20} />
             </button>
             <div>
-              <h1 className="text-lg font-black text-foreground">토론 이야기방</h1>
+              <h1 className="text-lg font-black text-foreground">질문과 생각 기록</h1>
               <p className="text-[10px] text-foreground/50 font-medium">사색과 대화의 모닥불</p>
             </div>
           </div>
@@ -226,7 +226,7 @@ export default function DiscussionPage() {
           <div className="flex justify-between items-center">
             <span className="text-[9px] font-black text-sage-dark uppercase tracking-widest flex items-center gap-1">
               <Layers size={10} />
-              모임 진행 단계 시뮬레이터 (정적 테스트용)
+              독서 흐름 단계 시뮬레이터 (정적 테스트용)
             </span>
             <span className="text-[9px] font-extrabold text-foreground/40">클릭하여 전환</span>
           </div>
@@ -258,8 +258,8 @@ export default function DiscussionPage() {
             <Info size={11} className="text-sage-dark flex-shrink-0 mt-0.5" />
             <span>
               {discussionStage === 'question_collecting' 
-                ? '현재는 [질문 수집] 단계입니다. 선정 질문은 준비 중 상태이며, 제안 질문에 대해 상세 토론 대신 "질문 다듬기 의견" 피드백만 교환합니다.'
-                : '현재는 [토론 진행] 단계입니다. 선정된 질문이 활성화되어 실제 상세 토론방에 입장하고 댓글을 달 수 있습니다.'
+                ? '현재는 [질문 정제] 단계입니다. 선정 질문은 준비 중이며, 제안된 질문들을 다듬고 사색 메모를 남겨둘 수 있습니다.'
+                : '현재는 [생각 나누기] 단계입니다. 선정된 질문이 활성화되어 고유한 생각을 기록하고 다른 이들과 소통할 수 있습니다.'
               }
             </span>
           </div>
@@ -290,7 +290,7 @@ export default function DiscussionPage() {
           </div>
         ) : (
           <div className="bg-sage-light/10 border border-card-border/60 rounded-2xl p-4.5 text-center text-xs font-bold text-foreground/40">
-            🔒 토론 오픈 단계에는 신규 질문 제안이 마감됩니다.
+            🔒 생각 나누기 단계에는 신규 질문 제안이 마감됩니다.
           </div>
         )}
 
@@ -298,7 +298,7 @@ export default function DiscussionPage() {
         <div className="flex flex-col gap-3">
           <div className="flex items-center gap-2">
             <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
-            <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정된 토론 주제</h2>
+            <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
           </div>
           
           {discussionStage === 'question_collecting' ? (
@@ -441,7 +441,7 @@ export default function DiscussionPage() {
 
             <div className="flex justify-between items-start mt-2">
               <div className="flex flex-col gap-0.5 pr-6">
-                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">함께 질문 다듬기</span>
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">질문 다듬기 메모</span>
                 <p className="text-xs font-black text-foreground leading-snug">
                   &ldquo;{selectedQ.content}&rdquo;
                 </p>
@@ -490,7 +490,7 @@ export default function DiscussionPage() {
             </form>
             
             <p className="text-[8px] text-foreground/45 text-center leading-normal">
-              * 이곳의 피드백은 대화 주제 개선 전용이며, 토론 오픈 시 댓글로 보존되지 않습니다.
+              * 이곳의 메모는 사색 개선 전용이며, 생각 나누기가 활성화되면 댓글로 보존되지 않습니다.
             </p>
           </div>
         </div>
@@ -506,8 +506,8 @@ export default function DiscussionPage() {
 
             <div className="flex justify-between items-center mt-2">
               <div className="flex flex-col gap-0.5">
-                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">이번 달의 토론 준비실</span>
-                <h3 className="text-sm font-black text-foreground">선정된 도란도란 질문 목록</h3>
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">이번 달의 생각 준비실</span>
+                <h3 className="text-sm font-black text-foreground">선정된 사색 질문 목록</h3>
               </div>
               <button 
                 onClick={() => setIsPreviewOpen(false)}
@@ -526,7 +526,7 @@ export default function DiscussionPage() {
                   <div className="flex justify-between items-center">
                     <span className="text-[9px] font-black text-sage-dark bg-sage-light px-2 py-0.5 rounded">질문 {idx + 1}</span>
                     <span className="text-[9px] font-extrabold text-warm-beige bg-warm-beige/10 border border-warm-beige/25 px-2 py-0.5 rounded animate-pulse">
-                      토론 준비중
+                      생각 정리중
                     </span>
                   </div>
                   <p className="text-[11px] font-extrabold text-foreground leading-relaxed">
@@ -539,11 +539,11 @@ export default function DiscussionPage() {
             <div className="bg-background border border-card-border rounded-2xl p-4 text-center mt-1.5">
               <p className="text-[11px] font-extrabold text-sage-dark flex justify-center items-center gap-1">
                 <Calendar size={13} />
-                토론은 5월 24일부터 정식 오픈됩니다.
+                생각 나누기는 5월 24일부터 활성화됩니다.
               </p>
               <p className="text-[9px] text-foreground/45 mt-1 leading-snug">
-                지금은 질문을 준비하고 생각을 다듬는 정갈한 시간입니다.<br />
-                오픈 시각이 되면 모닥불방의 댓글 기능이 활성화됩니다.
+                지금은 질문을 정제하고 생각을 채워가는 고요한 시간입니다.<br />
+                활성화 시각이 되면 사색 기록을 남길 수 있는 댓글 기능이 열립니다.
               </p>
             </div>
           </div>

@@ -199,7 +199,7 @@ export default function HomePage() {
             <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
               <div className="flex justify-between items-start">
                 <div className="flex flex-col">
-                  <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">우리 모임</span>
+                  <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">독서 공간</span>
                   <h3 className="text-sm font-black text-foreground">{activeClub.title}</h3>
                   {activeClub.description && (
                     <p className="text-[11px] text-foreground/55 mt-0.5 leading-snug">{activeClub.description}</p>
@@ -243,8 +243,8 @@ export default function HomePage() {
                   <MessageSquare size={18} className="text-white" />
                 </div>
                 <div className="flex flex-col gap-0.5">
-                  <h4 className="text-xs font-extrabold">질문 후보가 {questionCount}개 모였어요</h4>
-                  <p className="text-[10px] text-white/80 font-medium">함께 이야기하고 싶은 질문을 골라보세요.</p>
+                  <h4 className="text-xs font-extrabold">질문 후보가 {questionCount}개 모였습니다</h4>
+                  <p className="text-[10px] text-white/80 font-medium">오래 붙잡고 싶은 질문들을 살펴보세요.</p>
                 </div>
               </div>
               <div className="flex items-center gap-0.5 text-[10px] font-bold bg-white/10 px-2.5 py-1.5 rounded-xl hover:bg-white/20 transition-all">

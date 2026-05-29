@@ -28,6 +28,7 @@ export default function ClubHubPage() {
   const [inviteCodeInput, setInviteCodeInput] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const [userRole, setUserRole] = useState<'admin' | 'member'>('admin');
   const router = useRouter();
 
   // 모임 데이터 로드 함수
@@ -135,11 +136,43 @@ export default function ClubHubPage() {
         {/* 헤더 타이틀 */}
         <div className="flex items-center justify-between py-1">
           <div className="flex flex-col gap-0.5">
-            <h1 className="text-xl font-black text-foreground">우리 모임 공간</h1>
-            <p className="text-[10px] text-foreground/50 font-medium">소중한 독서의 동반자들</p>
+            <h1 className="text-xl font-black text-foreground">나의 독서 공간</h1>
+            <p className="text-[10px] text-foreground/50 font-medium">차분한 독서의 흐름</p>
           </div>
           <div className="w-8 h-8 bg-sage-light/60 rounded-xl flex justify-center items-center">
             <Users className="text-sage-dark" size={16} />
+          </div>
+        </div>
+
+        {/* 역할 시뮬레이터 배너 */}
+        <div className="bg-sage-light/20 border border-sage-light/50 rounded-2xl p-3 flex items-center justify-between shadow-sm backdrop-blur-sm">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[8px] font-bold text-sage-dark/80 uppercase tracking-widest">시뮬레이션 모드</span>
+            <span className="text-xs font-extrabold text-foreground">
+              현재 역할: {userRole === 'admin' ? '방장 (Admin)' : '모임원 (Member)'}
+            </span>
+          </div>
+          <div className="flex bg-background/80 border border-card-border p-1 rounded-xl gap-1">
+            <button
+              onClick={() => setUserRole('admin')}
+              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all ${
+                userRole === 'admin' 
+                  ? 'bg-sage-medium text-white shadow-sm' 
+                  : 'text-foreground/50 hover:bg-sage-light/30'
+              }`}
+            >
+              방장
+            </button>
+            <button
+              onClick={() => setUserRole('member')}
+              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all ${
+                userRole === 'member' 
+                  ? 'bg-sage-medium text-white shadow-sm' 
+                  : 'text-foreground/50 hover:bg-sage-light/30'
+              }`}
+            >
+              모임원
+            </button>
           </div>
         </div>
 
@@ -211,7 +244,7 @@ export default function ClubHubPage() {
             <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-2.5 shadow-sm relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-sage-light/20 rounded-full translate-x-12 -translate-y-12 -z-10" />
               
-              <span className="text-[9px] font-black text-sage-medium uppercase tracking-widest">우리 독서 아지트</span>
+              <span className="text-[9px] font-black text-sage-medium uppercase tracking-widest">현재 독서 공간</span>
               <h2 className="text-base font-black text-foreground">{activeClub.title}</h2>
               {activeClub.description ? (
                 <p className="text-[11px] text-foreground/50 leading-relaxed font-medium">{activeClub.description}</p>
@@ -229,7 +262,7 @@ export default function ClubHubPage() {
                       <BookOpen size={14} />
                     </div>
                     <div className="flex flex-col">
-                      <span className="text-[9px] font-bold text-foreground/40 uppercase">함께 읽는 책</span>
+                      <span className="text-[9px] font-bold text-foreground/40 uppercase">읽고 있는 책</span>
                       <span className="text-xs font-extrabold text-foreground leading-none mt-0.5">{activeBook.title}</span>
                     </div>
                   </div>
@@ -260,12 +293,16 @@ export default function ClubHubPage() {
               </div>
             )}
 
-            {/* 3. 함께 읽는 사람들 아바타 리스트 */}
+            {/* 3. 읽고 있는 사람들 아바타 리스트 */}
             {members.length > 0 && (
               <div className="bg-card-bg border border-card-border rounded-2xl p-4.5 shadow-sm flex flex-col gap-3">
                 <div className="flex justify-between items-center">
-                  <span className="text-[10px] font-bold text-sage-dark uppercase tracking-wider">책장을 넘기는 사람들 ({members.length}명)</span>
-                  <span className="text-[9px] text-foreground/40 font-medium">실시간 진행 공유 중</span>
+                  <span className="text-[10px] font-bold text-sage-dark uppercase tracking-wider">
+                    {members.length === 1 ? '홀로 채워가는 책장' : `책장을 넘기는 사람들 (${members.length}명)`}
+                  </span>
+                  <span className="text-[9px] text-foreground/40 font-medium">
+                    {members.length === 1 ? '기록 저장 중' : '실시간 진행 공유 중'}
+                  </span>
                 </div>
                 
                 <div className="flex items-center gap-2 overflow-x-auto py-1 scrollbar-none">
@@ -292,6 +329,13 @@ export default function ClubHubPage() {
                     );
                   })}
                 </div>
+
+                {/* 1인 상태 동반자 초대 팁 배너 */}
+                {members.length === 1 && (
+                  <div className="mt-1 bg-sage-light/20 border border-sage-light/45 rounded-xl p-3 text-[9px] text-sage-dark/85 leading-relaxed font-semibold">
+                    💡 <b>안내</b>: 현재 방에 홀로 머무는 중입니다. 친구와 함께 읽고 싶다면 하단의 <b>초대코드</b>를 복사해 전해 보세요.
+                  </div>
+                )}
               </div>
             )}
 
@@ -349,22 +393,24 @@ export default function ClubHubPage() {
                 </div>
               </div>
 
-              {/* 모임 설정 */}
-              <div 
-                onClick={() => alert('모임 설정 기능은 MVP 2단계에서 제공됩니다. 방장 권한 및 모임 관리 메뉴가 포함될 예정입니다.')}
-                className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-28 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
-              >
-                <div className="w-8 h-8 bg-foreground/5 rounded-xl flex justify-center items-center text-foreground/50">
-                  <Settings size={15} />
-                </div>
-                <div className="flex justify-between items-end">
-                  <div className="flex flex-col gap-0.5">
-                    <h3 className="text-xs font-black text-foreground group-hover:text-foreground transition-colors">모임 설정</h3>
-                    <p className="text-[9px] text-foreground/40 font-medium">관리자 메뉴</p>
+              {/* 모임 설정 (방장에게만 노출) */}
+              {userRole === 'admin' && (
+                <div 
+                  onClick={() => router.push('/club/settings')}
+                  className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-28 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
+                >
+                  <div className="w-8 h-8 bg-foreground/5 rounded-xl flex justify-center items-center text-foreground/50 group-hover:bg-sage-light/60 group-hover:text-sage-dark transition-all">
+                    <Settings size={15} />
                   </div>
-                  <ChevronRight size={14} className="text-foreground/35" />
+                  <div className="flex justify-between items-end">
+                    <div className="flex flex-col gap-0.5">
+                      <h3 className="text-xs font-black text-foreground group-hover:text-sage-dark transition-colors">모임 설정</h3>
+                      <p className="text-[9px] text-foreground/40 font-medium">관리자 메뉴</p>
+                    </div>
+                    <ChevronRight size={14} className="text-foreground/35 group-hover:text-sage-dark transition-colors" />
+                  </div>
                 </div>
-              </div>
+              )}
 
             </div>
 
