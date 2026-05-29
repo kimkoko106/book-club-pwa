@@ -29,6 +29,8 @@ export default function ClubHubPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'member'>('admin');
+  const [stage, setStage] = useState<string>('question_collecting');
+  const [timeline, setTimeline] = useState({ reading: '05.01~05.14', question: '05.15~05.25', discussion: '05.26~05.31' });
   const router = useRouter();
 
   // 모임 데이터 로드 함수
@@ -63,6 +65,67 @@ export default function ClubHubPage() {
         if (myClubs.length > 0) {
           const club = myClubs[0];
           setActiveClub(club);
+
+          // 독서 흐름 및 타임라인 자동 동기화
+          const localStage = localStorage.getItem(`bookclub_mock_club_stage_${club.id}`);
+          if (localStage) setStage(localStage);
+
+          const localStart = localStorage.getItem(`bookclub_start_date_${club.id}`) || '2026-05-01';
+          const localEnd = localStorage.getItem(`bookclub_end_date_${club.id}`) || '2026-05-31';
+          const localQDays = Number(localStorage.getItem(`bookclub_q_days_${club.id}`) || '10');
+          const localTDays = Number(localStorage.getItem(`bookclub_t_days_${club.id}`) || '5');
+          const localIsAdvanced = localStorage.getItem(`bookclub_is_advanced_${club.id}`) === 'true';
+
+          try {
+            const start = new Date(localStart);
+            const end = new Date(localEnd);
+            if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+              const formatDateStr = (d: Date) => `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+
+              if (localIsAdvanced) {
+                const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`);
+                const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`);
+                const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`);
+                const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`);
+
+                const qs = localQStart ? new Date(localQStart) : null;
+                const qe = localQEnd ? new Date(localQEnd) : null;
+                const ts = localTStart ? new Date(localTStart) : null;
+                const te = localTEnd ? new Date(localTEnd) : null;
+
+                let rEndStr = '';
+                if (qs && !isNaN(qs.getTime())) {
+                  const rEnd = new Date(qs);
+                  rEnd.setDate(qs.getDate() - 1);
+                  rEndStr = formatDateStr(rEnd);
+                }
+
+                setTimeline({
+                  reading: `${formatDateStr(start)}~${rEndStr || '?'}`,
+                  question: `${qs && !isNaN(qs.getTime()) ? formatDateStr(qs) : '?'}~${qe && !isNaN(qe.getTime()) ? formatDateStr(qe) : '?'}`,
+                  discussion: `${ts && !isNaN(ts.getTime()) ? formatDateStr(ts) : '?'}~${te && !isNaN(te.getTime()) ? formatDateStr(te) : '?'}`
+                });
+              } else {
+                const tStart = new Date(end);
+                tStart.setDate(end.getDate() - localTDays + 1);
+                const qStart = new Date(end);
+                qStart.setDate(end.getDate() - localQDays + 1);
+                const qEnd = new Date(tStart);
+                qEnd.setDate(tStart.getDate() - 1);
+                const rEnd = new Date(qStart);
+                rEnd.setDate(qStart.getDate() - 1);
+
+                setTimeline({
+                  reading: `${formatDateStr(start)}~${formatDateStr(rEnd)}`,
+                  question: `${formatDateStr(qStart)}~${formatDateStr(qEnd)}`,
+                  discussion: `${formatDateStr(tStart)}~${formatDateStr(end)}`
+                });
+              }
+            }
+          } catch (err) {
+            console.error('타임라인 연동 파싱 실패:', err);
+          }
+
           await loadClubData(data.user.id, club.id);
         } else {
           setActiveClub(null);
@@ -121,12 +184,12 @@ export default function ClubHubPage() {
     );
   }
 
-  // 모임 단계 정의 (더미 상태 매핑)
+  // 모임 단계 정의 (설정된 진행 상태 동적 매핑)
   const workflowSteps = [
-    { label: '읽기 중', active: false },
-    { label: '질문 모으는 중', active: true },
-    { label: '토론', active: false },
-    { label: '결산', active: false }
+    { label: '책에 몰입', active: stage === 'reading' },
+    { label: '질문 정제', active: stage === 'question_collecting' },
+    { label: '생각 나누기', active: stage === 'discussion' },
+    { label: '결산 준비', active: stage === 'archiving' }
   ];
 
   return (
@@ -290,6 +353,22 @@ export default function ClubHubPage() {
                     </div>
                   ))}
                 </div>
+
+                {/* 자동 계산된 일정 3단 콤팩트 칩 */}
+                <div className="grid grid-cols-3 gap-1.5 mt-3.5 bg-background/60 border border-card-border/50 rounded-xl p-2 text-center shadow-xs animate-fade-in">
+                  <div className="flex flex-col text-center">
+                    <span className="text-[7.5px] font-black text-foreground/40 leading-none">1. 몰입</span>
+                    <span className="text-[8px] font-bold text-foreground/50 mt-0.5">{timeline.reading}</span>
+                  </div>
+                  <div className="flex flex-col border-x border-card-border/60 text-center">
+                    <span className="text-[7.5px] font-black text-foreground/40 leading-none">2. 정제</span>
+                    <span className="text-[8px] font-bold text-foreground/50 mt-0.5">{timeline.question}</span>
+                  </div>
+                  <div className="flex flex-col text-center">
+                    <span className="text-[7.5px] font-black text-foreground/40 leading-none">3. 나눔</span>
+                    <span className="text-[8px] font-bold text-foreground/50 mt-0.5">{timeline.discussion}</span>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -361,7 +440,7 @@ export default function ClubHubPage() {
 
               {/* 다음 책 후보 */}
               <div 
-                onClick={() => alert('다음 책 투표방은 현재 기획 중입니다. 함께 읽을 소중한 다음 도서들의 등장을 조금만 기다려주세요! 🗳️')}
+                onClick={() => router.push('/club/candidate')}
                 className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-28 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
               >
                 <div className="w-8 h-8 bg-warm-beige/25 rounded-xl flex justify-center items-center text-warm-beige">
@@ -370,7 +449,7 @@ export default function ClubHubPage() {
                 <div className="flex justify-between items-end">
                   <div className="flex flex-col gap-0.5">
                     <h3 className="text-xs font-black text-foreground group-hover:text-warm-beige transition-colors">다음 책 후보</h3>
-                    <p className="text-[9px] text-foreground/40 font-medium">미리 엿보는 설렘</p>
+                    <p className="text-[9px] text-foreground/40 font-medium">서재에서 건너온 다음 이야기</p>
                   </div>
                   <ChevronRight size={14} className="text-foreground/35 group-hover:text-warm-beige" />
                 </div>

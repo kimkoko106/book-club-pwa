@@ -27,7 +27,7 @@ export default function Navigation({ currentUser }: NavigationProps) {
   };
 
   const handleShelfClick = () => {
-    alert('내 책장 서비스는 MVP 2단계에서 공개됩니다. 차분히 다음 책장을 채워나갈 준비를 해주세요! 📖');
+    router.push('/bookshelf');
   };
 
   const handleClubClick = () => {

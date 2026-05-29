@@ -17,7 +17,10 @@ import {
   UserX,
   MessageSquareQuote,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Calendar,
+  Sliders,
+  ChevronRight
 } from 'lucide-react';
 
 // 책 검색용 더미 리스트
@@ -59,6 +62,7 @@ export default function ClubSettingsPage() {
   // 모달 제어 상태
   const [isBookModalOpen, setIsBookModalOpen] = useState(false);
   const [isClubInfoModalOpen, setIsClubInfoModalOpen] = useState(false);
+  const [isFlowModalOpen, setIsFlowModalOpen] = useState(false);
 
   // 책 검색 상태
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,8 +72,21 @@ export default function ClubSettingsPage() {
   const [clubTitleInput, setClubTitleInput] = useState('');
   const [clubDescInput, setClubDescInput] = useState('');
 
-  // 질문 후보 정렬 상태 (likes: 공감순, latest: 최신순)
+  // 질문 후보 정렬 상태
   const [sortOrder, setSortOrder] = useState<'likes' | 'latest'>('likes');
+
+  // --- 독서 흐름 및 타임라인 자동 계산용 상태 ---
+  const [startDate, setStartDate] = useState('2026-05-01');
+  const [endDate, setEndDate] = useState('2026-05-31');
+  const [qDays, setQDays] = useState(10);
+  const [tDays, setTDays] = useState(5);
+  const [stage, setStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('question_collecting');
+  const [isAdvanced, setIsAdvanced] = useState(false);
+  const [qStartDate, setQStartDate] = useState('2026-05-20');
+  const [qEndDate, setQEndDate] = useState('2026-05-25');
+  const [tStartDate, setTStartDate] = useState('2026-05-26');
+  const [tEndDate, setTEndDate] = useState('2026-05-31');
+  const [validationError, setValidationError] = useState('');
 
   // 1. 초기 데이터 로드
   useEffect(() => {
@@ -89,6 +106,28 @@ export default function ClubSettingsPage() {
           setClubTitleInput(club.title);
           setClubDescInput(club.description || '');
 
+          // 로컬스토리지에 저장된 독서 흐름 설정 로드
+          const localStart = localStorage.getItem(`bookclub_start_date_${club.id}`);
+          const localEnd = localStorage.getItem(`bookclub_end_date_${club.id}`);
+          const localQDays = localStorage.getItem(`bookclub_q_days_${club.id}`);
+          const localTDays = localStorage.getItem(`bookclub_t_days_${club.id}`);
+          const localStage = localStorage.getItem(`bookclub_mock_club_stage_${club.id}`);
+          const localIsAdvanced = localStorage.getItem(`bookclub_is_advanced_${club.id}`);
+          const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`);
+          const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`);
+          const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`);
+          const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`);
+
+          if (localStart) setStartDate(localStart);
+          if (localEnd) setEndDate(localEnd);
+          if (localQDays) setQDays(Number(localQDays));
+          if (localTDays) setTDays(Number(localTDays));
+          if (localStage) setStage(localStage as any);
+          if (localQStart) setQStartDate(localQStart);
+          if (localQEnd) setQEndDate(localQEnd);
+          if (localTStart) setTStartDate(localTStart);
+          if (localTEnd) setTEndDate(localTEnd);
+
           const book = await mockApi.books.getByClub(club.id);
           setActiveBook(book);
 
@@ -106,6 +145,171 @@ export default function ClubSettingsPage() {
     }
     loadData();
   }, [router]);
+
+  // 날짜 MM.DD 형식 포맷 헬퍼
+  const formatDateStr = (date: Date) => {
+    if (isNaN(date.getTime())) return '';
+    return `${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+  };
+
+  // 자동 흐름 일정 계산 함수
+  const getTimelineDates = () => {
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return { reading: '', question: '', discussion: '' };
+      }
+
+      if (isAdvanced) {
+        const qs = new Date(qStartDate);
+        const qe = new Date(qEndDate);
+        const ts = new Date(tStartDate);
+        const te = new Date(tEndDate);
+
+        let rEndStr = '';
+        if (!isNaN(qs.getTime())) {
+          const rEnd = new Date(qs);
+          rEnd.setDate(qs.getDate() - 1);
+          rEndStr = formatDateStr(rEnd);
+        }
+
+        return {
+          reading: `${formatDateStr(start)} ~ ${rEndStr || '?'}`,
+          question: `${isNaN(qs.getTime()) ? '?' : formatDateStr(qs)} ~ ${isNaN(qe.getTime()) ? '?' : formatDateStr(qe)}`,
+          discussion: `${isNaN(ts.getTime()) ? '?' : formatDateStr(ts)} ~ ${isNaN(te.getTime()) ? '?' : formatDateStr(te)}`
+        };
+      } else {
+        // 3단계: 생각 나누기 (종료일 기준 tDays일 전부터 종료일까지)
+        const tStart = new Date(end);
+        tStart.setDate(end.getDate() - tDays + 1);
+
+        // 2단계: 질문 정제 (종료일 기준 qDays일 전부터 토론 시작 전날까지)
+        const qStart = new Date(end);
+        qStart.setDate(end.getDate() - qDays + 1);
+        
+        const qEnd = new Date(tStart);
+        qEnd.setDate(tStart.getDate() - 1);
+
+        // 1단계: 책에 몰입 (시작일 ~ 질문 정제 시작 전날까지)
+        const rEnd = new Date(qStart);
+        rEnd.setDate(qStart.getDate() - 1);
+
+        return {
+          reading: `${formatDateStr(start)} ~ ${formatDateStr(rEnd)}`,
+          question: `${formatDateStr(qStart)} ~ ${formatDateStr(qEnd)}`,
+          discussion: `${formatDateStr(tStart)} ~ ${formatDateStr(end)}`
+        };
+      }
+    } catch {
+      return { reading: '05.01 ~ 05.14', question: '05.15 ~ 05.25', discussion: '05.26 ~ 05.31' };
+    }
+  };
+
+  // 자동 계산 값을 수동 입력 필드에도 기본값으로 동기화 (isAdvanced 가 꺼져 있을 때만)
+  useEffect(() => {
+    if (!isAdvanced) {
+      try {
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+          const tStart = new Date(end);
+          tStart.setDate(end.getDate() - tDays + 1);
+
+          const qStart = new Date(end);
+          qStart.setDate(end.getDate() - qDays + 1);
+          
+          const qEnd = new Date(tStart);
+          qEnd.setDate(tStart.getDate() - 1);
+
+          const toYmd = (d: Date) => {
+            if (isNaN(d.getTime())) return '';
+            return d.toISOString().split('T')[0];
+          };
+
+          setQStartDate(toYmd(qStart));
+          setQEndDate(toYmd(qEnd));
+          setTStartDate(toYmd(tStart));
+          setTEndDate(toYmd(end));
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }, [startDate, endDate, qDays, tDays, isAdvanced]);
+
+  // 실시간 날짜 유효성 체크
+  useEffect(() => {
+    const validate = () => {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return '읽기 시작일과 종료일을 올바르게 입력해 주세요.';
+      }
+
+      // 1. 읽기 시작일은 읽기 종료일보다 이전이어야 함
+      if (start >= end) {
+        return '읽기 종료일은 시작일보다 뒤여야 해요.';
+      }
+
+      if (!isAdvanced) {
+        // 자동 설정값 유효성 체크
+        const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+        
+        // 질문 정리 기간 n일이 토론 기간 m일보다 커야 함
+        if (qDays <= tDays) {
+          return '질문 정리 기간은 토론 기간보다 길게 설정되어야 해요.';
+        }
+        
+        // 전체 읽기 기간보다 질문/토론 기간이 길면 안 됨
+        if (qDays > totalDays) {
+          return '전체 읽기 기간보다 질문/토론 기간이 길 수 없어요.';
+        }
+      } else {
+        // 수동 설정 유효성 체크
+        const qs = new Date(qStartDate);
+        const qe = new Date(qEndDate);
+        const ts = new Date(tStartDate);
+        const te = new Date(tEndDate);
+
+        if (isNaN(qs.getTime()) || isNaN(qe.getTime()) || isNaN(ts.getTime()) || isNaN(te.getTime())) {
+          return '모든 세부 일정을 올바르게 입력해 주세요.';
+        }
+
+        // 2. 질문 모집 시작일은 읽기 시작일 이후여야 함
+        if (qs < start) {
+          return '질문 모집 시작일은 전체 읽기 시작일 이후여야 해요.';
+        }
+
+        // 질문 모집 시작일이 종료일보다 이전이어야 함
+        if (qs > qe) {
+          return '질문 모집 종료일은 시작일보다 뒤여야 해요.';
+        }
+
+        // 3. 질문 모집 종료일은 토론 시작일보다 이전이어야 함
+        if (qe >= ts) {
+          return '토론 시작일은 질문 모집 종료일 이후여야 해요.';
+        }
+
+        // 4. 토론 시작일은 토론 종료일보다 이전이어야 함
+        if (ts >= te) {
+          return '토론 종료일은 시작일보다 뒤여야 해요.';
+        }
+
+        // 5. 토론 종료일은 읽기 종료일과 같거나 이전이어야 함
+        if (te > end) {
+          return '토론 종료일은 전체 읽기 종료일을 넘길 수 없어요.';
+        }
+      }
+
+      return '';
+    };
+
+    setValidationError(validate());
+  }, [startDate, endDate, qDays, tDays, qStartDate, qEndDate, tStartDate, tEndDate, isAdvanced]);
+
+  const calculatedTimeline = getTimelineDates();
 
   // 2. 공유책 변경 기능
   const handleSelectBook = (selectedBook: typeof DUMMY_SEARCH_BOOKS[0]) => {
@@ -268,6 +472,36 @@ export default function ClubSettingsPage() {
     alert(`초대 코드 [ ${activeClub.invite_code} ] 가 복사되었습니다.`);
   };
 
+  // 독서 흐름 설정 최종 저장 (로컬스토리지 반영)
+  const handleSaveFlowSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeClub) return;
+
+    if (validationError) {
+      return;
+    }
+
+    try {
+      localStorage.setItem(`bookclub_start_date_${activeClub.id}`, startDate);
+      localStorage.setItem(`bookclub_end_date_${activeClub.id}`, endDate);
+      localStorage.setItem(`bookclub_q_days_${activeClub.id}`, String(qDays));
+      localStorage.setItem(`bookclub_t_days_${activeClub.id}`, String(tDays));
+      localStorage.setItem(`bookclub_mock_club_stage_${activeClub.id}`, stage);
+      localStorage.setItem(`bookclub_is_advanced_${activeClub.id}`, String(isAdvanced));
+      
+      localStorage.setItem(`bookclub_q_start_date_${activeClub.id}`, qStartDate);
+      localStorage.setItem(`bookclub_q_end_date_${activeClub.id}`, qEndDate);
+      localStorage.setItem(`bookclub_t_start_date_${activeClub.id}`, tStartDate);
+      localStorage.setItem(`bookclub_t_end_date_${activeClub.id}`, tEndDate);
+
+      setIsFlowModalOpen(false);
+      alert('독서 흐름 설정이 저장되었습니다.');
+    } catch (err) {
+      console.error(err);
+      alert('설정 저장에 실패했습니다.');
+    }
+  };
+
   // 도서 실시간 검색
   const handleSearchBook = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
@@ -296,6 +530,17 @@ export default function ClubSettingsPage() {
     }
   });
 
+  // 단계 라벨 한국어 맵
+  const getStageLabel = (s: string) => {
+    switch (s) {
+      case 'reading': return '책에 몰입 중';
+      case 'question_collecting': return '질문 정제 중';
+      case 'discussion': return '생각 나누기 중';
+      case 'archiving': return '결산 준비 중';
+      default: return '질문 정제 중';
+    }
+  };
+
   return (
     <div className="flex-grow flex flex-col bg-background text-foreground">
       
@@ -316,7 +561,7 @@ export default function ClubSettingsPage() {
         </div>
       </header>
 
-      {/* 2. 모임 정보 수정 UX 카드화 (호버 하이라이트 제공, 클릭 시 수정) */}
+      {/* 2. 모임 정보 수정 UX 카드화 */}
       <div 
         onClick={() => setIsClubInfoModalOpen(true)}
         className="mx-4 mt-4 bg-card-bg border border-card-border hover:border-sage-medium rounded-xl p-3.5 flex flex-col gap-1.5 shadow-xs cursor-pointer transition-all duration-200 hover:shadow-sm group"
@@ -344,7 +589,7 @@ export default function ClubSettingsPage() {
           </p>
         </div>
 
-        {/* SECTION 1. 이번 달 독서 흐름 */}
+        {/* SECTION 1. 이번 달 독서 흐름 (자동 계산 적용) */}
         <section className="bg-card-bg border border-card-border rounded-xl p-4.5 shadow-sm flex flex-col gap-3.5">
           <div className="flex justify-between items-center">
             <div className="flex items-center gap-1.5">
@@ -353,12 +598,12 @@ export default function ClubSettingsPage() {
               </div>
               <h3 className="text-xs font-black text-foreground">이번 달 독서 흐름</h3>
             </div>
-            <span className="bg-sage-medium/15 text-sage-dark border border-sage-medium/20 text-[8.5px] font-black px-2 py-0.5 rounded-full">
-              질문 모으는 중
+            <span className="bg-sage-medium/15 text-sage-dark border border-sage-medium/20 text-[8.5px] font-black px-2 py-0.5 rounded-full animate-pulse">
+              {getStageLabel(stage)}
             </span>
           </div>
 
-          {/* 공유책 콤팩트 상세 */}
+          {/* 공유책 및 흐름 조율 버튼 */}
           {activeBook ? (
             <div className="bg-background border border-card-border/80 rounded-xl p-3 flex gap-3 items-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -373,13 +618,14 @@ export default function ClubSettingsPage() {
                 <span className="text-[9px] text-foreground/45 font-medium truncate leading-none">{activeBook.author}</span>
               </div>
               <button 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsBookModalOpen(true);
+                onClick={() => {
+                  setIsAdvanced(false);
+                  setIsFlowModalOpen(true);
                 }}
-                className="px-2.5 py-1 bg-sage-medium hover:bg-sage-dark text-white rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
+                className="px-2.5 py-1.5 bg-sage-medium hover:bg-sage-dark text-white rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs flex items-center gap-1"
               >
-                변경
+                <Edit3 size={10} />
+                흐름 설정
               </button>
             </div>
           ) : (
@@ -388,22 +634,37 @@ export default function ClubSettingsPage() {
             </div>
           )}
 
-          {/* 타임라인 가로 3단 그리드 */}
+          {/* 타임라인 가로 3단 그리드 (계산된 날짜 투영) */}
           <div className="grid grid-cols-3 gap-2 mt-0.5">
-            <div className="flex flex-col items-center p-1.5 bg-background/55 border border-card-border/40 rounded-lg text-center">
-              <span className="text-[7.5px] font-black text-foreground/40">1단계: 몰입</span>
-              <span className="text-[8.5px] font-extrabold text-foreground/50 mt-0.5 line-through">05.01~05.20</span>
+            <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
+              stage === 'reading' 
+                ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
+                : 'bg-background/55 border-card-border/40 text-foreground/50'
+            }`}>
+              <span className="text-[7.5px] font-black uppercase">1단계: 몰입</span>
+              <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.reading}</span>
             </div>
-            <div className="flex flex-col items-center p-1.5 bg-sage-light/15 border border-sage-light/45 rounded-lg text-center">
-              <span className="text-[7.5px] font-black text-sage-dark flex items-center gap-0.5">
-                <span className="w-1 h-1 bg-sage-medium rounded-full animate-pulse" />
+            <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
+              stage === 'question_collecting' 
+                ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
+                : 'bg-background/55 border-card-border/40 text-foreground/50'
+            }`}>
+              <span className="text-[7.5px] font-black uppercase flex items-center gap-0.5">
+                {stage === 'question_collecting' && <span className="w-1 h-1 bg-sage-medium rounded-full animate-pulse" />}
                 2단계: 정제
               </span>
-              <span className="text-[8.5px] font-black text-sage-dark mt-0.5">05.15~05.22</span>
+              <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.question}</span>
             </div>
-            <div className="flex flex-col items-center p-1.5 bg-background/25 border border-card-border/20 rounded-lg text-center">
-              <span className="text-[7.5px] font-black text-foreground/30">3단계: 나눔</span>
-              <span className="text-[8.5px] font-bold text-foreground/30 mt-0.5">05.23~05.31</span>
+            <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
+              stage === 'discussion' 
+                ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
+                : 'bg-background/55 border-card-border/40 text-foreground/50'
+            }`}>
+              <span className="text-[7.5px] font-black uppercase flex items-center gap-0.5">
+                {stage === 'discussion' && <span className="w-1 h-1 bg-sage-medium rounded-full animate-pulse" />}
+                3단계: 나눔
+              </span>
+              <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.discussion}</span>
             </div>
           </div>
         </section>
@@ -424,7 +685,7 @@ export default function ClubSettingsPage() {
             </div>
           </div>
 
-          {/* 2-A. 선정 질문 요약 (상단 요약 콤팩트 영역 + 개별 [제거] 버튼 연동) */}
+          {/* 2-A. 선정 질문 요약 (제거 액션 바인딩) */}
           {selectedQuestions.length > 0 ? (
             <div className="bg-sage-light/10 border border-sage-light/45 rounded-xl p-3 flex flex-col gap-1.5">
               <span className="text-[8px] font-black text-sage-dark uppercase tracking-wider">선정된 사색 질문 목록</span>
@@ -456,7 +717,7 @@ export default function ClubSettingsPage() {
             <div className="flex justify-between items-center px-0.5">
               <span className="text-[8.5px] font-extrabold text-foreground/45 uppercase tracking-wider">질문 후보 리스트</span>
               
-              {/* 공감순/최신순 정렬 토글 */}
+              {/* 정렬 필터 */}
               <div className="flex bg-foreground/5 p-0.5 rounded-lg border border-card-border/40">
                 <button 
                   onClick={() => setSortOrder('likes')}
@@ -603,7 +864,260 @@ export default function ClubSettingsPage() {
       </main>
 
       {/* ==========================================
-          MODAL 1: 공유책 검색 변경 바텀 시트
+          MODAL 1: 독서 흐름 조정 바텀 시트 (신규)
+      ========================================== */}
+      {isFlowModalOpen && (
+        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
+          <form 
+            onSubmit={handleSaveFlowSettings}
+            className="bg-card-bg border-t border-card-border w-full max-w-[480px] rounded-t-2xl p-5 shadow-2xl flex flex-col gap-4.5 max-h-[90vh] overflow-y-auto animate-slide-up"
+          >
+            {/* 시트 헤더 */}
+            <div className="flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Sliders size={14} className="text-sage-medium" />
+                <h3 className="text-xs font-black text-foreground">이번 달 독서 흐름 조정</h3>
+              </div>
+              <button 
+                type="button"
+                onClick={() => setIsFlowModalOpen(false)}
+                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer"
+              >
+                <X size={12} />
+              </button>
+            </div>
+
+            {/* SECTION 1: 공유책 (모달 내 모달 전환 연계) */}
+            <div className="bg-background border border-card-border rounded-xl p-3 flex flex-col gap-2">
+              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">공유책 설정</span>
+              <div className="flex justify-between items-center gap-3">
+                <div className="flex items-center gap-2 min-w-0">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img 
+                    src={activeBook?.cover_url || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80'} 
+                    alt="책 표지" 
+                    className="w-8 h-11 rounded object-cover border border-card-border"
+                  />
+                  <div className="min-w-0">
+                    <h4 className="text-[11px] font-black text-foreground truncate">{activeBook?.title || '선택 도서'}</h4>
+                    <p className="text-[9px] text-foreground/45 font-medium truncate">{activeBook?.author}</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setIsBookModalOpen(true);
+                  }}
+                  className="px-2.5 py-1 bg-sage-light/20 border border-sage-light text-sage-dark text-[9px] font-black rounded-lg hover:bg-sage-light/40 transition-all cursor-pointer"
+                >
+                  책 변경
+                </button>
+              </div>
+            </div>
+
+            {/* SECTION 2: 독서 흐름 (일정 범위) */}
+            <div className="bg-background border border-card-border rounded-xl p-3.5 flex flex-col gap-3">
+              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest flex items-center gap-1">
+                <Calendar size={11} />
+                독서 흐름 일정
+              </span>
+              
+              <div className="grid grid-cols-2 gap-3.5">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[8px] font-black text-foreground/45 uppercase">읽기 시작일</label>
+                  <input 
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground"
+                    required
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[8px] font-black text-foreground/45 uppercase">읽기 종료일</label>
+                  <input 
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground"
+                    required
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* SECTION 3: 자동 흐름 설정 */}
+            <div className="bg-background border border-card-border rounded-xl p-3.5 flex flex-col gap-3">
+              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">자동 흐름 설정</span>
+              
+              <div className="grid grid-cols-2 gap-3.5">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[8px] font-black text-foreground/45 uppercase">질문 정제 기간</label>
+                  <div className="flex items-center gap-1 bg-card-bg border border-card-border rounded-lg px-2.5 py-1">
+                    <span className="text-[9px] text-foreground/40 font-bold">종료</span>
+                    <input 
+                      type="number"
+                      value={qDays}
+                      onChange={(e) => setQDays(Math.max(1, Number(e.target.value)))}
+                      className="w-10 bg-transparent text-[10px] font-extrabold focus:outline-none text-center text-foreground"
+                      min={1}
+                      required
+                    />
+                    <span className="text-[9px] text-foreground/50 font-bold">일 전 시작</span>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[8px] font-black text-foreground/45 uppercase">생각 나누기 기간</label>
+                  <div className="flex items-center gap-1 bg-card-bg border border-card-border rounded-lg px-2.5 py-1">
+                    <span className="text-[9px] text-foreground/40 font-bold">종료</span>
+                    <input 
+                      type="number"
+                      value={tDays}
+                      onChange={(e) => setTDays(Math.max(1, Number(e.target.value)))}
+                      className="w-10 bg-transparent text-[10px] font-extrabold focus:outline-none text-center text-foreground"
+                      min={1}
+                      required
+                    />
+                    <span className="text-[9px] text-foreground/50 font-bold">일 전 시작</span>
+                  </div>
+                </div>
+              </div>
+
+              <span className="text-[8px] text-foreground/45 leading-relaxed mt-0.5">
+                * 읽기 종료일을 기준으로 사색 질문 수집 및 토론 일정의 흐름이 자동 생성됩니다.
+              </span>
+            </div>
+
+            {/* SECTION 4: 현재 진행 단계 변경 */}
+            <div className="bg-background border border-card-border rounded-xl p-3 flex flex-col gap-2.5">
+              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">현재 진행 단계</span>
+              
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { value: 'reading', label: '1. 책에 몰입' },
+                  { value: 'question_collecting', label: '2. 질문 정제' },
+                  { value: 'discussion', label: '3. 생각 나누기' },
+                  { value: 'archiving', label: '4. 결산 준비' }
+                ].map((item) => (
+                  <button
+                    type="button"
+                    key={item.value}
+                    onClick={() => setStage(item.value as any)}
+                    className={`py-2 px-2.5 rounded-xl text-[10px] font-black text-center transition-all cursor-pointer ${
+                      stage === item.value
+                        ? 'bg-sage-medium text-white shadow-xs'
+                        : 'bg-card-bg border border-card-border text-foreground/55 hover:bg-sage-light/25'
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* SECTION 5: 고급 설정 (세부 일정 수동 조율) */}
+            <div className="border border-card-border/60 rounded-xl p-3.5 flex flex-col gap-2.5 bg-background/40 transition-all duration-300">
+              <div className="flex justify-between items-center">
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">고급 설정</span>
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <span className="text-[9px] text-foreground/60 font-bold">세부 일정 직접 설정</span>
+                  <input 
+                    type="checkbox"
+                    checked={isAdvanced}
+                    onChange={(e) => setIsAdvanced(e.target.checked)}
+                    className="w-3.5 h-3.5 border border-card-border rounded text-sage-medium focus:ring-sage-medium cursor-pointer"
+                  />
+                </label>
+              </div>
+
+              {/* 아코디언 형태로 펼쳐지는 영역 */}
+              <div className={`transition-all duration-300 ease-in-out overflow-hidden ${
+                isAdvanced ? 'max-h-[300px] opacity-100 mt-1 pt-2 border-t border-card-border/30' : 'max-h-0 opacity-0 pointer-events-none'
+              }`}>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">질문 모집 시작일</label>
+                    <input 
+                      type="date"
+                      value={qStartDate}
+                      onChange={(e) => setQStartDate(e.target.value)}
+                      className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">질문 모집 종료일</label>
+                    <input 
+                      type="date"
+                      value={qEndDate}
+                      onChange={(e) => setQEndDate(e.target.value)}
+                      className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">토론 시작일</label>
+                    <input 
+                      type="date"
+                      value={tStartDate}
+                      onChange={(e) => setTStartDate(e.target.value)}
+                      className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                      required
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">토론 종료일</label>
+                    <input 
+                      type="date"
+                      value={tEndDate}
+                      onChange={(e) => setTEndDate(e.target.value)}
+                      className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                      required
+                    />
+                  </div>
+                </div>
+                <p className="text-[8px] text-foreground/40 leading-relaxed mt-2.5">
+                  * 세부 일정 직접 설정을 활성화하시면 질문 모집 및 토론의 시작/종료일을 커스텀하게 입력하실 수 있습니다.
+                </p>
+              </div>
+            </div>
+
+            {/* 유효성 에러 메시지 표시 */}
+            {validationError && (
+              <div className="bg-red-500/5 border border-red-500/20 text-red-500/85 text-[9px] font-extrabold px-3 py-2 rounded-xl flex items-center gap-1.5 animate-fade-in">
+                <AlertCircle size={12} className="flex-shrink-0" />
+                <span>{validationError}</span>
+              </div>
+            )}
+
+            {/* 저장 버튼 그룹 */}
+            <div className="flex gap-2.5 mt-1">
+              <button 
+                type="button"
+                onClick={() => setIsFlowModalOpen(false)}
+                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
+              >
+                취소
+              </button>
+              <button 
+                type="submit"
+                disabled={!!validationError}
+                className={`flex-1 py-2.5 rounded-xl text-[10px] font-black shadow-sm transition-all ${
+                  validationError
+                    ? 'bg-foreground/10 text-foreground/35 cursor-not-allowed border border-card-border/40'
+                    : 'bg-sage-medium hover:bg-sage-dark text-white cursor-pointer'
+                }`}
+              >
+                설정 저장
+              </button>
+            </div>
+
+          </form>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 2: 공유책 검색 변경 바텀 시트
       ========================================== */}
       {isBookModalOpen && (
         <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-end justify-center z-50 animate-fade-in">
@@ -682,7 +1196,7 @@ export default function ClubSettingsPage() {
       )}
 
       {/* ==========================================
-          MODAL 2: 모임 정보 수정 다이얼로그
+          MODAL 3: 모임 정보 수정 다이얼로그
       ========================================== */}
       {isClubInfoModalOpen && (
         <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-center justify-center p-5 z-50 animate-fade-in">

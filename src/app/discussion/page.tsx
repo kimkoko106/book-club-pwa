@@ -108,10 +108,19 @@ export default function DiscussionPage() {
 
         const myClubs = await mockApi.clubs.getMyClubs(data.user.id);
         if (myClubs.length > 0) {
-          setActiveClubId(myClubs[0].id);
-          const book = await mockApi.books.getByClub(myClubs[0].id);
+          const club = myClubs[0];
+          setActiveClubId(club.id);
+          const book = await mockApi.books.getByClub(club.id);
           if (book) {
             setActiveBookId(book.id);
+          }
+
+          // 로컬스토리지 설정 단계를 읽어와 이야기방 초기 상태 동기화
+          const localStage = localStorage.getItem(`bookclub_mock_club_stage_${club.id}`);
+          if (localStage === 'discussion' || localStage === 'reading' || localStage === 'archiving') {
+            setDiscussionStage('discussion');
+          } else {
+            setDiscussionStage('question_collecting');
           }
         }
         await loadQuestions();
