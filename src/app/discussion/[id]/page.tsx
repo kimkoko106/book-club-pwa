@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, use } from 'react';
 import { useRouter } from 'next/navigation';
 import { mockApi, DiscussionQuestion, DiscussionComment } from '../../../lib/supabase';
 import Navigation from '../../../components/Navigation';
-import { ArrowLeft, MessageSquare, Send, Calendar, Layers, Compass } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Send, Calendar, Layers } from 'lucide-react';
 
 interface DiscussionDetailPageProps {
   params: Promise<{ id: string }>;
@@ -23,6 +23,12 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
   const [stageParam, setStageParam] = useState<string | null>(null);
   const router = useRouter();
 
+  // 인라인 수정/삭제 및 에러 처리용 상태 추가
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState('');
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
   // URL에서 stage 파라미터 로드
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -39,12 +45,24 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
         setQuestion(q);
         const c = await mockApi.discussion.getComments(questionId);
         setComments(c);
+
+        // 질문에 연결된 그룹(모임)의 활성 monthly_book 단계를 실제 DB 기준 조회하여 게이팅 동기화
+        if (q.club_id) {
+          const mb = await mockApi.clubs.getMonthlyBook(q.club_id);
+          if (mb) {
+            let uiStage = 'reading';
+            if (mb.stage === 'question') uiStage = 'question_collecting';
+            else if (mb.stage === 'discussion') uiStage = 'discussion';
+            else if (mb.stage === 'recap') uiStage = 'archiving';
+            setStageParam(uiStage);
+          }
+        }
       } else {
         alert('존재하지 않는 토론 질문입니다.');
         window.location.href = '/discussion';
       }
     } catch (err) {
-      console.error(err);
+      console.warn('[DB/API] loadData 에러:', err);
     }
   }, [questionId]);
 
@@ -60,7 +78,7 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
         setCurrentUser(data.user);
         await loadData();
       } catch (err) {
-        console.error(err);
+        console.warn('[DB/Auth] init 에러:', err);
       } finally {
         setIsLoading(false);
       }
@@ -73,21 +91,82 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
     e.preventDefault();
     if (!currentUser || !newCommentContent.trim()) return;
 
+    if (newCommentContent.length > 1000) {
+      setActionError('생각은 1000자 이내로 적어주세요.');
+      return;
+    }
+
     setIsSubmitting(true);
+    setActionError(null);
     try {
-      console.log('새 토론 댓글 등록:', newCommentContent);
-      await mockApi.discussion.createComment(
+      const addedComment = await mockApi.discussion.createComment(
         currentUser.id,
         questionId,
         newCommentContent.trim()
       );
       setNewCommentContent('');
-      await loadData(); // 댓글 목록 및 댓글 수 갱신
+      
+      // 전체 reload 없이 즉시 append
+      setComments(prev => [...prev, addedComment]);
+      
+      // 질문의 댓글 카운트 동적 증가
+      setQuestion(prev => prev ? { ...prev, comments_count: (prev.comments_count || 0) + 1 } : null);
     } catch (err) {
-      console.error(err);
-      alert('댓글 등록에 실패했습니다.');
+      console.warn('[DB/API] handleCreateComment 에러:', err);
+      setActionError('생각을 저장하지 못했어요. 잠시 후 다시 시도해주세요.');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // 댓글 수정 핸들러
+  const handleUpdateComment = async (commentId: string) => {
+    if (!editingContent.trim()) return;
+
+    if (editingContent.length > 1000) {
+      setActionError('생각은 1000자 이내로 적어주세요.');
+      return;
+    }
+
+    setIsActionLoading(true);
+    setActionError(null);
+    try {
+      await mockApi.discussion.updateComment(commentId, editingContent.trim());
+      
+      // 전체 reload 없이 로컬 상태 즉시 변경
+      setComments(prev => 
+        prev.map(c => c.id === commentId ? { ...c, content: editingContent.trim() } : c)
+      );
+      setEditingCommentId(null);
+      setEditingContent('');
+    } catch (err) {
+      console.warn('[DB/API] handleUpdateComment 에러:', err);
+      setActionError('생각을 수정하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // 댓글 삭제 핸들러
+  const handleDeleteComment = async (commentId: string) => {
+    const hasConfirmed = window.confirm('생각 기록을 삭제할까요?');
+    if (!hasConfirmed) return;
+
+    setIsActionLoading(true);
+    setActionError(null);
+    try {
+      await mockApi.discussion.deleteComment(commentId);
+      
+      // 전체 reload 없이 로컬 상태 즉시 제거
+      setComments(prev => prev.filter(c => c.id !== commentId));
+      
+      // 질문의 댓글 카운트 동적 감소
+      setQuestion(prev => prev ? { ...prev, comments_count: Math.max(0, (prev.comments_count || 0) - 1) } : null);
+    } catch (err) {
+      console.warn('[DB/API] handleDeleteComment 에러:', err);
+      setActionError('생각을 삭제하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsActionLoading(false);
     }
   };
 
@@ -196,6 +275,19 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
 
         <div className="h-px bg-card-border" />
 
+        {/* 에러 피드백 배너 */}
+        {actionError && (
+          <div className="bg-red-50 text-red-500 border border-red-100 rounded-xl px-4 py-2.5 text-[10px] font-bold flex justify-between items-center transition-all animate-fadeIn">
+            <span>{actionError}</span>
+            <button 
+              onClick={() => setActionError(null)}
+              className="text-[9px] underline hover:text-red-600 pl-2 font-medium"
+            >
+              닫기
+            </button>
+          </div>
+        )}
+
         {/* 댓글 리스트 */}
         <div className="flex flex-col gap-4 max-h-[350px] overflow-y-auto pr-1">
           {comments.length === 0 ? (
@@ -206,6 +298,7 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
             comments.map((comment) => {
               const avatarUrl = comment.profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${comment.user_id}`;
               const isMe = currentUser && comment.user_id === currentUser.id;
+              const isEditing = editingCommentId === comment.id;
 
               return (
                 <div key={comment.id} className="flex flex-col gap-1.5 bg-card-bg border border-card-border rounded-2xl p-4 shadow-inner relative">
@@ -221,38 +314,114 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
                         {comment.profile?.username} {isMe && '(나)'}
                       </span>
                     </div>
-                    <span>{formatTime(comment.created_at)}</span>
+                    
+                    <div className="flex items-center gap-2">
+                      <span>{formatTime(comment.created_at)}</span>
+                      {isMe && !isEditing && (
+                        <div className="flex items-center gap-1.5 ml-2 border-l border-card-border pl-2">
+                          <button
+                            onClick={() => {
+                              setEditingCommentId(comment.id);
+                              setEditingContent(comment.content);
+                              setActionError(null);
+                            }}
+                            disabled={isActionLoading || isSubmitting}
+                            className="hover:text-sage-medium active:scale-95 transition-all font-bold"
+                          >
+                            수정
+                          </button>
+                          <span>·</span>
+                          <button
+                            onClick={() => handleDeleteComment(comment.id)}
+                            disabled={isActionLoading || isSubmitting}
+                            className="hover:text-red-400 active:scale-95 transition-all font-bold"
+                          >
+                            삭제
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-xs font-semibold text-foreground/80 leading-relaxed pl-6">
-                    {comment.content}
-                  </p>
+                  
+                  {isEditing ? (
+                    <div className="flex flex-col gap-2 mt-1 pl-6">
+                      <textarea
+                        value={editingContent}
+                        onChange={(e) => setEditingContent(e.target.value)}
+                        maxLength={1000}
+                        rows={2}
+                        className="w-full px-4 py-2 bg-background border border-card-border rounded-xl text-xs focus:outline-none focus:border-sage-medium font-semibold resize-none"
+                        disabled={isActionLoading}
+                      />
+                      <div className="flex justify-end gap-1.5 text-[10px] font-bold">
+                        <button
+                          onClick={() => {
+                            setEditingCommentId(null);
+                            setEditingContent('');
+                          }}
+                          className="px-2.5 py-1 bg-foreground/5 hover:bg-foreground/10 text-foreground/60 rounded-md transition-colors"
+                          disabled={isActionLoading}
+                        >
+                          취소
+                        </button>
+                        <button
+                          onClick={() => handleUpdateComment(comment.id)}
+                          className="px-2.5 py-1 bg-sage-medium hover:bg-sage-dark text-white rounded-md transition-colors flex items-center gap-1"
+                          disabled={isActionLoading || !editingContent.trim()}
+                        >
+                          {isActionLoading ? (
+                            <span className="w-2.5 h-2.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          ) : '수정 완료'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs font-semibold text-foreground/80 leading-relaxed pl-6 whitespace-pre-wrap">
+                      {comment.content}
+                    </p>
+                  )}
                 </div>
               );
             })
           )}
         </div>
 
-        {/* 내 생각 남기기 댓글 입력창 */}
-        <form onSubmit={handleCreateComment} className="bg-card-bg border border-card-border rounded-2xl p-4 shadow-sm flex flex-col gap-2 mt-auto">
-          <span className="text-[10px] font-bold text-foreground/50 uppercase tracking-wider">내 생각 남기기</span>
-          <div className="flex gap-2">
-            <textarea
-              value={newCommentContent}
-              onChange={(e) => setNewCommentContent(e.target.value)}
-              placeholder="따뜻한 사색의 대열에 나의 한 마디를 얹어주세요..."
-              rows={2}
-              className="flex-1 px-4 py-2 bg-background border border-card-border rounded-xl text-xs focus:outline-none focus:border-sage-medium font-semibold placeholder:text-foreground/30 resize-none"
-              required
-            />
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="px-4 bg-sage-medium hover:bg-sage-dark disabled:bg-sage-light text-white rounded-xl flex justify-center items-center transition-colors shadow-sm"
-            >
-              <Send size={15} />
-            </button>
+        {/* 내 생각 남기기 댓글 입력창 (Gating 적용) */}
+        {stageParam === 'discussion' ? (
+          <form onSubmit={handleCreateComment} className="bg-card-bg border border-card-border rounded-2xl p-4 shadow-sm flex flex-col gap-2 mt-auto">
+            <span className="text-[10px] font-bold text-foreground/50 uppercase tracking-wider">내 생각 남기기</span>
+            <div className="flex gap-2">
+              <textarea
+                value={newCommentContent}
+                onChange={(e) => setNewCommentContent(e.target.value)}
+                placeholder="따뜻한 사색의 대열에 나의 한 마디를 얹어주세요..."
+                rows={2}
+                maxLength={1000}
+                className="flex-1 px-4 py-2 bg-background border border-card-border rounded-xl text-xs focus:outline-none focus:border-sage-medium font-semibold placeholder:text-foreground/30 resize-none"
+                required
+                disabled={isSubmitting}
+              />
+              <button
+                type="submit"
+                disabled={isSubmitting || !newCommentContent.trim()}
+                className="px-4 bg-sage-medium hover:bg-sage-dark disabled:bg-sage-light text-white rounded-xl flex justify-center items-center transition-colors shadow-sm"
+              >
+                {isSubmitting ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <Send size={15} />
+                )}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="bg-sage-light/10 border border-sage-light/40 rounded-2xl p-4 text-center mt-auto flex flex-col gap-1 shadow-sm">
+            <span className="text-[10px] font-bold text-sage-dark uppercase tracking-wider">알림</span>
+            <p className="text-[11px] font-semibold text-foreground/50 leading-relaxed">
+              지금은 기록을 돌아보는 시간입니다. 생각 나누기는 끝이 났지만, 남겨진 흔적들을 천천히 음미해보세요. 🌙
+            </p>
           </div>
-        </form>
+        )}
       </main>
 
       {/* 하단 내비게이션 바 */}

@@ -19,8 +19,7 @@ export default function CreateClubPage() {
   useEffect(() => {
     mockApi.auth.getUser().then(({ data }) => {
       if (!data?.user) {
-        alert('로그인이 필요한 페이지입니다.');
-        window.location.href = '/login';
+        router.replace('/login');
       } else {
         setCurrentUser(data.user);
       }
@@ -51,9 +50,9 @@ export default function CreateClubPage() {
       
       alert(`모임 [${newClub.title}]이 개설되었습니다!\n초대 코드: ${newClub.invite_code}`);
       router.push('/');
-    } catch (err) {
-      console.error(err);
-      alert('모임 개설에 실패했습니다.');
+    } catch (err: any) {
+      console.error('모임 개설 상세 에러:', err);
+      alert(`모임 개설에 실패했습니다.\n\n[상세 오류]\n${err.message || err}`);
     } finally {
       setIsLoading(false);
     }

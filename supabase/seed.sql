@@ -17,7 +17,9 @@ values
   ('00000000-0000-0000-0000-000000000001', '차분한 책벌레', 'https://api.dicebear.com/7.x/bottts/svg?seed=user1'),
   ('00000000-0000-0000-0000-000000000002', '민트초코 독서가', 'https://api.dicebear.com/7.x/bottts/svg?seed=user2'),
   ('00000000-0000-0000-0000-000000000003', '오후의 사색', 'https://api.dicebear.com/7.x/bottts/svg?seed=user3')
-on conflict (id) do nothing;
+on conflict (id) do update set
+  username = excluded.username,
+  avatar_url = excluded.avatar_url;
 
 -- 3. groups (독서방)
 -- group-1: 숲속의 북클럽 (그룹 모임)

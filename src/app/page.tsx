@@ -2,12 +2,13 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi, isMockMode, supabase, checkIsCompleted } from '../lib/supabase';
+import { mockApi, isMockMode, supabase, checkIsCompleted, clearSessionCache } from '../lib/supabase';
 import { BookClub, Book, UserBookProgress } from '../types';
 import BookProgressCard from '../components/BookProgressCard';
 import MemberList from '../components/MemberList';
 import Navigation from '../components/Navigation';
 import { BookOpen, Compass, Plus, Sparkles, LogOut, ArrowRight, MessageSquare } from 'lucide-react';
+
 
 export default function HomePage() {
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
@@ -17,27 +18,93 @@ export default function HomePage() {
   const [membersProgress, setMembersProgress] = useState<UserBookProgress[]>([]);
   const [questionCount, setQuestionCount] = useState<number>(8);
   const [isLoading, setIsLoading] = useState(true);
-  const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('question_collecting');
+  const [initError, setInitError] = useState<string | null>(null);
+  const [showTimeoutFallback, setShowTimeoutFallback] = useState(false);
+  const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('reading');
   const router = useRouter();
+
+  // 5초 로딩 타임아웃 가드 및 자동 리다이렉트
+  useEffect(() => {
+    let redirectTimer: NodeJS.Timeout;
+    let fallbackTimer: NodeJS.Timeout;
+
+    if (isLoading) {
+      fallbackTimer = setTimeout(() => {
+        setShowTimeoutFallback(true);
+        // 5초 타임아웃 발생 시 오염되거나 잘못 꼬인 세션/쿠키를 강제 청소합니다.
+        clearSessionCache();
+        
+        // 3초 추가 대기 후 로그인 화면으로 자동 이동 시도
+        redirectTimer = setTimeout(() => {
+          router.replace('/login');
+        }, 3000);
+      }, 5000);
+    } else {
+      setShowTimeoutFallback(false);
+    }
+
+    return () => {
+      clearTimeout(fallbackTimer);
+      clearTimeout(redirectTimer);
+    };
+  }, [isLoading]);
+
+  // PWA Service Worker 강제 제거 및 캐시 무력화 훅
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          for (const registration of registrations) {
+            registration.unregister().then((success) => {
+              if (success) {
+                console.log('[PWA SW] ServiceWorker successfully unregistered.');
+                window.location.reload();
+              }
+            });
+          }
+        });
+      }
+      if ('caches' in window) {
+        caches.keys().then((keys) => {
+          keys.forEach((key) => caches.delete(key));
+        });
+      }
+    }
+  }, []);
 
   // 데이터 로드 함수 정의
   const loadClubData = useCallback(async (userId: string, clubId: string) => {
     try {
-      const book = await mockApi.books.getByClub(clubId);
-      setActiveBook(book);
+      const monthlyBook = await mockApi.clubs.getMonthlyBook(clubId);
+      
+      if (monthlyBook) {
+        const book = monthlyBook.books;
+        setActiveBook(book);
 
-      if (book) {
-        // 내 독서 진행도 조회
-        const progresses = await mockApi.progress.getMemberProgressList(clubId, book.id);
-        const mine = progresses.find((p) => p.user_id === userId) || null;
-        setMyProgress(mine);
+        // DB stage -> UI stage mapping
+        let uiStage: 'reading' | 'question_collecting' | 'discussion' | 'archiving' = 'reading';
+        if (monthlyBook.stage === 'question') uiStage = 'question_collecting';
+        else if (monthlyBook.stage === 'discussion') uiStage = 'discussion';
+        else if (monthlyBook.stage === 'recap') uiStage = 'archiving';
         
-        // 동료 진행도 조회
-        setMembersProgress(progresses);
-        
-        // 질문 후보 개수 조회
-        const questions = await mockApi.discussion.getQuestions(clubId, book.id);
-        setQuestionCount(questions.length);
+        setDiscussionStage(uiStage);
+
+        if (book) {
+          // 내 독서 진행도 조회
+          const progresses = await mockApi.progress.getMemberProgressList(clubId, book.id);
+          const mine = progresses.find((p) => p.user_id === userId) || null;
+          setMyProgress(mine);
+          
+          // 동료 진행도 조회
+          setMembersProgress(progresses);
+          
+          // 질문 후보 개수 조회
+          const questions = await mockApi.discussion.getQuestions(clubId, book.id);
+          setQuestionCount(questions.length);
+        }
+      } else {
+        setActiveBook(null);
+        setDiscussionStage('reading');
       }
     } catch (err) {
       console.error('모임 데이터 로드 실패:', err);
@@ -46,12 +113,16 @@ export default function HomePage() {
 
   // 인증 상태 및 초기 모임 목록 로드
   useEffect(() => {
+    let active = true;
     async function init() {
       setIsLoading(true);
+      setInitError(null);
       try {
         const { data } = await mockApi.auth.getUser();
+        if (!active) return;
+
         if (!data?.user) {
-          window.location.href = '/login';
+          router.replace('/login');
           return;
         }
         const user = data.user;
@@ -59,28 +130,36 @@ export default function HomePage() {
 
         // 사용자가 속한 모임 목록 가져오기
         const myClubs = await mockApi.clubs.getMyClubs(user.id);
+        if (!active) return;
+
         if (myClubs.length > 0) {
           const club = myClubs[0];
           setActiveClub(club);
           await loadClubData(user.id, club.id);
 
-          // 로컬스토리지 설정 단계를 읽어와 동기화
-          const localStage = localStorage.getItem(`bookclub_mock_club_stage_${club.id}`);
-          if (localStage === 'reading' || localStage === 'question_collecting' || localStage === 'discussion' || localStage === 'archiving') {
-            setDiscussionStage(localStage as any);
-          } else {
-            setDiscussionStage('question_collecting');
-          }
+
         } else {
           setActiveClub(null);
         }
+
+        // 성공적으로 모든 데이터를 불러왔을 때만 로딩 해제
+        if (active) {
+          setIsLoading(false);
+        }
       } catch (err) {
         console.error('초기 로드 에러:', err);
-      } finally {
-        setIsLoading(false);
+        if (active) {
+          setInitError('책방 연결에 실패했습니다. 로그인 화면으로 이동합니다...');
+          setTimeout(() => {
+            router.replace('/login');
+          }, 2000);
+        }
       }
     }
     init();
+    return () => {
+      active = false;
+    };
   }, [router, loadClubData]);
 
   // 내 읽기 상태 업데이트 액션
@@ -132,12 +211,52 @@ export default function HomePage() {
     router.push(`/discussion-warning?stage=${discussionStage}`);
   };
 
+  if (initError) {
+    return (
+      <div className="flex-1 flex flex-col justify-center items-center bg-background p-6">
+        <div className="flex flex-col items-center gap-4 text-center max-w-[280px]">
+          <div className="w-10 h-10 bg-red-50 text-red-500 rounded-full flex justify-center items-center font-bold text-lg">⚠️</div>
+          <p className="text-xs font-semibold text-red-600 leading-relaxed">{initError}</p>
+          <button 
+            onClick={() => { router.push('/login'); }}
+            className="mt-2 px-4 py-2 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+          >
+            로그인 화면으로 직접 이동
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="flex-1 flex flex-col justify-center items-center bg-background p-6">
         <div className="flex flex-col items-center gap-3">
           <div className="w-10 h-10 border-4 border-sage-medium border-t-transparent rounded-full animate-spin" />
           <span className="text-xs font-bold text-sage-dark">책방 문을 열고 있습니다...</span>
+          
+          {showTimeoutFallback && (
+            <div className="mt-6 flex flex-col items-center gap-3 text-center max-w-[280px]">
+              <p className="text-xs text-foreground/60 leading-relaxed font-medium">
+                책방 연결이 오래 걸리고 있어요.<br />
+                로그인 화면으로 이동해 다시 시작할 수 있어요.
+              </p>
+              <button 
+                onClick={() => { 
+                  clearSessionCache();
+                  router.push('/login'); 
+                }}
+                className="px-4 py-2 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-xs font-bold transition-all shadow-sm"
+              >
+                로그인 화면으로 이동
+              </button>
+            </div>
+          )}
+
+          {/* 캐시 무력화용 임시 버전 표시 */}
+          <span className="text-[9px] text-foreground/20 mt-12 select-none">
+            debug build: 2026-05-29 23:45
+          </span>
         </div>
       </div>
     );

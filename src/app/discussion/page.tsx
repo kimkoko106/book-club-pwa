@@ -20,6 +20,25 @@ import {
 
 const KEY_FEEDBACKS = 'bookclub_mock_feedbacks';
 
+function formatRelativeTime(dateString: string) {
+  try {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return '방금 전';
+    if (diffMins < 60) return `${diffMins}분 전`;
+    if (diffHours < 24) return `${diffHours}시간 전`;
+    if (diffDays < 7) return `${diffDays}일 전`;
+    return date.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' });
+  } catch (e) {
+    return '';
+  }
+}
+
 export default function DiscussionPage() {
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [questions, setQuestions] = useState<DiscussionQuestion[]>([]);
@@ -28,80 +47,52 @@ export default function DiscussionPage() {
   const [activeBookId, setActiveBookId] = useState<string>('book-1');
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [questionError, setQuestionError] = useState('');
+  const [reactionError, setReactionError] = useState('');
+  const [isReactionLoading, setIsReactionLoading] = useState<Record<string, boolean>>({});
   const router = useRouter();
 
   // 1. 토론방 단계 상태 정의 (시뮬레이터용)
-  const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('question_collecting');
+  const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('reading');
 
   // 2. Bottom Sheet 관련 상태 정의
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [selectedQ, setSelectedQ] = useState<DiscussionQuestion | null>(null);
-  const [feedbackList, setFeedbackList] = useState<string[]>([]);
+  const [feedbackList, setFeedbackList] = useState<any[]>([]);
   const [newFeedbackContent, setNewFeedbackContent] = useState('');
+  const [isFeedbackLoading, setIsFeedbackLoading] = useState(false);
+  const [feedbackError, setFeedbackError] = useState('');
+  const [isFeedbackSubmitting, setIsFeedbackSubmitting] = useState(false);
+  const [editingFeedbackId, setEditingFeedbackId] = useState<string | null>(null);
+  const [editingFeedbackContent, setEditingFeedbackContent] = useState('');
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
 
-  // 로컬 스토리지 피드백 로드 & 세이브 헬퍼
-  const loadFeedbacks = useCallback((qId: string): string[] => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const stored = localStorage.getItem(KEY_FEEDBACKS);
-      const allFeedbacks = stored ? JSON.parse(stored) : {};
-      
-      // 해당 질문에 피드백이 없으면 기본 더미 반환 및 저장
-      if (!allFeedbacks[qId]) {
-        const defaultDummies = qId === 'q-3' ? [
-          '마지막 장면 기준인지 궁금해요. 숲에서 나올 때의 감상인가요?',
-          '선택의 이유와 함께 일상 속 구체적인 대안도 나누면 좋겠어요.'
-        ] : qId === 'q-4' ? [
-          '저자가 세운 수치들이 현대의 자본주의 관점에서도 유효할지 궁금해요.',
-          '책에 나온 비용 단위를 오늘날 가치로 대략 설명해주시면 토론에 큰 도움이 될 듯합니다!'
-        ] : [
-          '이 질문을 구체화해서 현실의 나에게 어떻게 대입할지 보완하면 좋을 것 같아요.'
-        ];
-        allFeedbacks[qId] = defaultDummies;
-        localStorage.setItem(KEY_FEEDBACKS, JSON.stringify(allFeedbacks));
-        return defaultDummies;
-      }
-      return allFeedbacks[qId];
-    } catch {
-      return [];
+  // 질문 목록 로드 함수 (상태 업데이트용)
+  const loadQuestions = useCallback(async (clubId = activeClubId, bookId = activeBookId) => {
+    const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+    
+    if (!isMockMode && (!isValidUUID(clubId) || !isValidUUID(bookId))) {
+      setQuestions([]);
+      return;
     }
-  }, []);
 
-  const saveFeedback = (qId: string, content: string) => {
-    if (typeof window === 'undefined') return;
     try {
-      const stored = localStorage.getItem(KEY_FEEDBACKS);
-      const allFeedbacks = stored ? JSON.parse(stored) : {};
-      if (!allFeedbacks[qId]) {
-        allFeedbacks[qId] = [];
-      }
-      allFeedbacks[qId].push(content);
-      localStorage.setItem(KEY_FEEDBACKS, JSON.stringify(allFeedbacks));
-      setFeedbackList(allFeedbacks[qId]);
-    } catch (err) {
-      console.error('피드백 저장 실패:', err);
-    }
-  };
-
-  // 질문 목록 로드
-  const loadQuestions = useCallback(async () => {
-    try {
-      const data = await mockApi.discussion.getQuestions(activeClubId, activeBookId);
+      const data = await mockApi.discussion.getQuestions(clubId, bookId);
       setQuestions(data);
     } catch (err) {
-      console.error(err);
+      console.warn('[Discussion] loadQuestions warning:', err);
     }
   }, [activeClubId, activeBookId]);
 
+  // 1. 초기 사용자 세션 및 모임 정보 로드 (마운트 시 1회)
   useEffect(() => {
     async function init() {
       setIsLoading(true);
       try {
         const { data } = await mockApi.auth.getUser();
         if (!data?.user) {
-          window.location.href = '/login';
+          router.replace('/login');
           return;
         }
         setCurrentUser(data.user);
@@ -115,65 +106,207 @@ export default function DiscussionPage() {
             setActiveBookId(book.id);
           }
 
-          // 로컬스토리지 설정 단계를 읽어와 이야기방 초기 상태 동기화
-          const localStage = localStorage.getItem(`bookclub_mock_club_stage_${club.id}`);
-          if (localStage === 'reading') {
-            setDiscussionStage('reading');
-          } else if (localStage === 'question_collecting') {
-            setDiscussionStage('question_collecting');
-          } else if (localStage === 'discussion') {
-            setDiscussionStage('discussion');
-          } else if (localStage === 'archiving' || localStage === 'completed') {
-            setDiscussionStage('archiving');
+          // monthly_books 정보 조회하여 이야기방 초기 상태 동기화
+          const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
+          if (monthlyBook) {
+            let uiStage: 'reading' | 'question_collecting' | 'discussion' | 'archiving' = 'reading';
+            if (monthlyBook.stage === 'question') uiStage = 'question_collecting';
+            else if (monthlyBook.stage === 'discussion') uiStage = 'discussion';
+            else if (monthlyBook.stage === 'recap') uiStage = 'archiving';
+            setDiscussionStage(uiStage);
+            
+            localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, uiStage);
           } else {
-            setDiscussionStage('question_collecting');
+            setDiscussionStage('reading');
           }
         }
-        await loadQuestions();
       } catch (err) {
-        console.error(err);
+        console.warn('[Discussion] init error:', err);
       } finally {
         setIsLoading(false);
       }
     }
     init();
-  }, [loadQuestions]);
+  }, [router]);
+
+  // 2. 모임/책 ID가 변경되거나 사용자가 확인되면 질문 목록 자동 로드 (UUID 검증 포함)
+  useEffect(() => {
+    const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+    
+    if (!isMockMode && (!isValidUUID(activeClubId) || !isValidUUID(activeBookId))) {
+      setQuestions([]);
+      return;
+    }
+    
+    if (currentUser) {
+      loadQuestions(activeClubId, activeBookId);
+    }
+  }, [activeClubId, activeBookId, currentUser, loadQuestions]);
 
   // 질문 피드백 열기 핸들러
-  const handleOpenFeedback = (q: DiscussionQuestion, e: React.MouseEvent) => {
+  const handleOpenFeedback = async (q: DiscussionQuestion, e: React.MouseEvent) => {
     e.stopPropagation();
     setSelectedQ(q);
-    const list = loadFeedbacks(q.id);
-    setFeedbackList(list);
     setIsFeedbackOpen(true);
+    setIsFeedbackLoading(true);
+    setFeedbackError('');
+    setEditingFeedbackId(null);
+    try {
+      const list = await mockApi.discussion.getFeedbacks(q.id);
+      setFeedbackList(list);
+    } catch (err) {
+      console.error(err);
+      setFeedbackError('의견 목록을 불러오지 못했어요.');
+    } finally {
+      setIsFeedbackLoading(false);
+    }
   };
 
   // 피드백 등록 핸들러
-  const handleAddFeedback = (e: React.FormEvent) => {
+  const handleAddFeedback = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedQ || !newFeedbackContent.trim()) return;
-    saveFeedback(selectedQ.id, newFeedbackContent.trim());
-    setNewFeedbackContent('');
+    if (!currentUser || !selectedQ) return;
+
+    const content = newFeedbackContent.trim();
+    if (!content) {
+      setFeedbackError('의견 내용을 입력해주세요.');
+      return;
+    }
+
+    if (content.length > 100) {
+      setFeedbackError('의견은 최대 100자까지 입력 가능합니다.');
+      return;
+    }
+
+    setIsFeedbackSubmitting(true);
+    setFeedbackError('');
+
+    try {
+      const newFb = await mockApi.discussion.createFeedback(
+        currentUser.id,
+        selectedQ.id,
+        content
+      );
+      setNewFeedbackContent('');
+      setFeedbackList(prev => [...prev, newFb]); // 리스트에 새 피드백 추가
+      
+      // 질문 카드 내 의견 갯수 동기화
+      setQuestions(prev => prev.map(q => {
+        if (q.id === selectedQ.id) {
+          return {
+            ...q,
+            comments_count: (q.comments_count || 0) + 1
+          };
+        }
+        return q;
+      }));
+    } catch (err) {
+      console.error(err);
+      setFeedbackError('의견을 저장하지 못했어요.');
+    } finally {
+      setIsFeedbackSubmitting(false);
+    }
+  };
+
+  // 피드백 수정 핸들러
+  const startEditFeedback = (feedbackId: string, currentContent: string) => {
+    setEditingFeedbackId(feedbackId);
+    setEditingFeedbackContent(currentContent);
+  };
+
+  const cancelEditFeedback = () => {
+    setEditingFeedbackId(null);
+    setEditingFeedbackContent('');
+  };
+
+  const handleUpdateFeedback = async (feedbackId: string) => {
+    const content = editingFeedbackContent.trim();
+    if (!content) {
+      setFeedbackError('의견 내용을 입력해주세요.');
+      return;
+    }
+
+    setIsFeedbackSubmitting(true);
+    setFeedbackError('');
+
+    try {
+      await mockApi.discussion.updateFeedback(feedbackId, content);
+      setFeedbackList(prev =>
+        prev.map(f => (f.id === feedbackId ? { ...f, content } : f))
+      );
+      setEditingFeedbackId(null);
+      setEditingFeedbackContent('');
+    } catch (err) {
+      console.error(err);
+      setFeedbackError('의견을 수정하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsFeedbackSubmitting(false);
+    }
+  };
+
+  // 피드백 삭제 핸들러
+  const handleDeleteFeedback = async (feedbackId: string) => {
+    const confirmDelete = confirm('의견을 삭제할까요?');
+    if (!confirmDelete) return;
+
+    setIsFeedbackSubmitting(true);
+    setFeedbackError('');
+
+    try {
+      await mockApi.discussion.deleteFeedback(feedbackId);
+      setFeedbackList(prev => prev.filter(f => f.id !== feedbackId));
+      
+      // 질문 카드 내 의견 갯수 감산 동기화
+      if (selectedQ) {
+        setQuestions(prev => prev.map(q => {
+          if (q.id === selectedQ.id) {
+            return {
+              ...q,
+              comments_count: Math.max(0, (q.comments_count || 1) - 1)
+            };
+          }
+          return q;
+        }));
+      }
+    } catch (err) {
+      console.error(err);
+      setFeedbackError('의견을 삭제하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsFeedbackSubmitting(false);
+    }
   };
 
   // 질문 제안 등록 핸들러
   const handleCreateQuestion = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser || !newQuestionContent.trim()) return;
+    if (!currentUser) return;
+
+    const content = newQuestionContent.trim();
+    if (!content) {
+      setQuestionError('질문 내용을 입력해주세요.');
+      return;
+    }
+
+    if (content.length > 150) {
+      setQuestionError('질문은 최대 150자까지 입력 가능합니다.');
+      return;
+    }
 
     setIsSubmitting(true);
+    setQuestionError('');
     try {
-      await mockApi.discussion.createQuestion(
+      const newQ = await mockApi.discussion.createQuestion(
         currentUser.id,
         activeClubId,
         activeBookId,
-        newQuestionContent.trim()
+        content
       );
       setNewQuestionContent('');
-      await loadQuestions();
+      // 질문 목록에 새로 추가된 질문을 앞에 추가하여 전체 리로드 없이 즉시 업데이트
+      setQuestions(prev => [newQ, ...prev]);
     } catch (err) {
       console.error(err);
-      alert('질문 등록에 실패했습니다.');
+      setQuestionError('질문을 저장하지 못했어요.');
     } finally {
       setIsSubmitting(false);
     }
@@ -182,6 +315,11 @@ export default function DiscussionPage() {
   // 반응(리액션) 클릭 핸들러
   const handleReaction = async (questionId: string, type: 'curious' | 'talk', e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isReactionLoading[questionId]) return;
+
+    setIsReactionLoading(prev => ({ ...prev, [questionId]: true }));
+    setReactionError('');
+
     try {
       const updated = await mockApi.discussion.addReaction(questionId, type);
       if (updated) {
@@ -198,6 +336,9 @@ export default function DiscussionPage() {
       }
     } catch (err) {
       console.error(err);
+      setReactionError('반응을 남기지 못했어요.');
+    } finally {
+      setIsReactionLoading(prev => ({ ...prev, [questionId]: false }));
     }
   };
 
@@ -392,18 +533,24 @@ export default function DiscussionPage() {
                   value={newQuestionContent}
                   onChange={(e) => setNewQuestionContent(e.target.value)}
                   placeholder="책을 읽으며 든 질문을 가볍게 제안해 보세요..."
-                  className="flex-1 px-4 py-2.5 bg-background border border-card-border rounded-xl text-xs focus:outline-none focus:border-sage-medium font-semibold placeholder:text-foreground/30 text-foreground"
+                  className="flex-1 px-4 py-2.5 bg-background border border-card-border rounded-xl text-xs focus:outline-none focus:border-sage-medium font-semibold placeholder:text-foreground/30 text-foreground disabled:opacity-60"
                   maxLength={150}
+                  disabled={isSubmitting}
                   required
                 />
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-4 bg-sage-medium hover:bg-sage-dark text-white rounded-xl flex justify-center items-center transition-colors shadow-sm"
+                  className="px-4 bg-sage-medium hover:bg-sage-dark text-white rounded-xl flex justify-center items-center transition-colors shadow-sm disabled:opacity-60"
                 >
                   <Send size={15} />
                 </button>
               </form>
+              {questionError && (
+                <div className="text-[10px] text-red-500 font-semibold mt-1">
+                  {questionError}
+                </div>
+              )}
             </div>
 
             {/* 이번 달 선정 사색 질문 */}
@@ -436,6 +583,11 @@ export default function DiscussionPage() {
                 <div className="w-1.5 h-3.5 bg-warm-beige rounded-full" />
                 <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">질문 제안함 (피드백 중)</h2>
               </div>
+              {reactionError && (
+                <div className="text-[10px] text-red-500 font-semibold px-1">
+                  {reactionError}
+                </div>
+              )}
               {suggestedQuestions.length === 0 ? (
                 <div className="bg-card-bg border border-card-border border-dashed rounded-2xl py-6 text-center text-xs text-foreground/40 font-medium">
                   제안된 질문이 없습니다. 첫 질문을 올려보세요!
@@ -443,7 +595,8 @@ export default function DiscussionPage() {
               ) : (
                 <div className="flex flex-col gap-3">
                   {suggestedQuestions.map(q => {
-                    const count = loadFeedbacks(q.id).length;
+                    const count = q.comments_count || 0;
+                    const isLoadingReaction = isReactionLoading[q.id];
                     return (
                       <div
                         key={q.id}
@@ -462,14 +615,16 @@ export default function DiscussionPage() {
                         <div className="flex gap-2.5 pt-2 border-t border-card-border/40">
                           <button
                             onClick={(e) => handleReaction(q.id, 'curious', e)}
-                            className="px-3 py-1.5 bg-background hover:bg-sage-light/20 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95"
+                            disabled={isLoadingReaction}
+                            className="px-3 py-1.5 bg-background hover:bg-sage-light/20 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
                           >
                             <HelpCircle size={12} className="text-sage-medium/70" />
                             <span>나도 궁금해요 {q.reaction_curious_count}</span>
                           </button>
                           <button
                             onClick={(e) => handleReaction(q.id, 'talk', e)}
-                            className="px-3 py-1.5 bg-background hover:bg-sage-light/20 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95"
+                            disabled={isLoadingReaction}
+                            className="px-3 py-1.5 bg-background hover:bg-sage-light/20 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
                           >
                             <Heart size={12} className="text-warm-beige/80" />
                             <span>이야기하고 싶어요 {q.reaction_talk_count}</span>
@@ -491,6 +646,11 @@ export default function DiscussionPage() {
               <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
               <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
             </div>
+            {reactionError && (
+              <div className="text-[10px] text-red-500 font-semibold px-1">
+                {reactionError}
+              </div>
+            )}
             {selectedQuestions.length === 0 ? (
               <div className="bg-card-bg border border-card-border border-dashed rounded-2xl py-8 text-center text-xs text-foreground/40 font-medium">
                 선정된 질문이 아직 없습니다.
@@ -514,14 +674,16 @@ export default function DiscussionPage() {
                     <div className="flex gap-2.5 pt-2.5 border-t border-sage-light/50 pl-1">
                       <button
                         onClick={(e) => handleReaction(q.id, 'curious', e)}
-                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95"
+                        disabled={isReactionLoading[q.id]}
+                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
                       >
                         <HelpCircle size={12} className="text-sage-medium" />
                         <span>나도 궁금해요 {q.reaction_curious_count}</span>
                       </button>
                       <button
                         onClick={(e) => handleReaction(q.id, 'talk', e)}
-                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95"
+                        disabled={isReactionLoading[q.id]}
+                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
                       >
                         <Heart size={12} className="text-warm-beige" />
                         <span>이야기하고 싶어요 {q.reaction_talk_count}</span>
@@ -618,16 +780,102 @@ export default function DiscussionPage() {
             {/* 피드백 리스트 */}
             <div className="flex flex-col gap-2.5 max-h-[220px] overflow-y-auto pr-1">
               <span className="text-[9px] font-extrabold text-foreground/40">질문 보완 메모 ({feedbackList.length})</span>
-              {feedbackList.length === 0 ? (
+              {isFeedbackLoading ? (
+                <div className="flex justify-center items-center py-8">
+                  <div className="w-6 h-6 border-2 border-sage-medium border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : feedbackList.length === 0 ? (
                 <p className="text-[11px] text-center text-foreground/30 py-6">첫 의견을 남겨 질문을 한층 더 다듬어주세요.</p>
               ) : (
-                feedbackList.map((feedback, idx) => (
-                  <div key={idx} className="bg-background border border-card-border rounded-xl p-3 text-[11px] font-semibold text-foreground/75 leading-relaxed text-justify">
-                    {feedback}
-                  </div>
-                ))
+                <div className="flex flex-col gap-2.5">
+                  {feedbackList.map((feedback) => (
+                    <div key={feedback.id} className="bg-background border border-card-border rounded-xl p-3 flex flex-col gap-1.5">
+                      <div className="flex justify-between items-start">
+                        {/* 프로필 정보 */}
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-5 h-5 rounded-full overflow-hidden bg-sage-light/20 flex-shrink-0 flex items-center justify-center">
+                            {feedback.profile?.avatar_url ? (
+                              <img src={feedback.profile.avatar_url} alt="avatar" className="w-full h-full object-cover" />
+                            ) : (
+                              <div className="text-[8px] font-black text-sage-dark">
+                                {feedback.profile?.username?.substring(0, 1) || '독'}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-col">
+                            <span className="text-[9px] font-black text-foreground/80">{feedback.profile?.username || '독서가'}</span>
+                            <span className="text-[7.5px] text-foreground/45">{formatRelativeTime(feedback.created_at)}</span>
+                          </div>
+                        </div>
+
+                        {/* 본인일 때 수정/삭제 액션 */}
+                        {feedback.user_id === currentUser?.id && editingFeedbackId !== feedback.id && (
+                          <div className="flex gap-2 text-[8.5px] text-foreground/35 font-bold">
+                            <button
+                              onClick={() => startEditFeedback(feedback.id, feedback.content)}
+                              disabled={isFeedbackSubmitting}
+                              className="hover:text-sage-dark transition-colors disabled:opacity-50"
+                            >
+                              수정
+                            </button>
+                            <button
+                              onClick={() => handleDeleteFeedback(feedback.id)}
+                              disabled={isFeedbackSubmitting}
+                              className="hover:text-red-500 transition-colors disabled:opacity-50"
+                            >
+                              삭제
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 수정 폼 또는 텍스트 본문 */}
+                      {editingFeedbackId === feedback.id ? (
+                        <div className="flex flex-col gap-2 w-full mt-1">
+                          <textarea
+                            value={editingFeedbackContent}
+                            onChange={(e) => setEditingFeedbackContent(e.target.value)}
+                            className="w-full p-2 bg-background border border-sage-medium rounded-lg text-[11px] font-semibold focus:outline-none focus:ring-1 focus:ring-sage-medium text-foreground disabled:opacity-60"
+                            maxLength={100}
+                            rows={2}
+                            disabled={isFeedbackSubmitting}
+                          />
+                          <div className="flex justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={cancelEditFeedback}
+                              disabled={isFeedbackSubmitting}
+                              className="px-2 py-1 text-[9px] bg-foreground/5 hover:bg-foreground/10 text-foreground/75 rounded-md font-bold transition-all disabled:opacity-50"
+                            >
+                              취소
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateFeedback(feedback.id)}
+                              disabled={isFeedbackSubmitting}
+                              className="px-2 py-1 text-[9px] bg-sage-medium hover:bg-sage-dark text-white rounded-md font-bold transition-all disabled:opacity-50"
+                            >
+                              수정완료
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] font-semibold text-foreground/75 leading-relaxed text-justify mt-0.5">
+                          {feedback.content}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
+
+            {/* 에러 피드백 노출 */}
+            {feedbackError && (
+              <p className="text-[9.5px] text-red-500 font-semibold px-1">
+                {feedbackError}
+              </p>
+            )}
 
             {/* 피드백 제출 폼 */}
             <form onSubmit={handleAddFeedback} className="flex gap-2 pt-2 border-t border-card-border/50">
@@ -636,13 +884,15 @@ export default function DiscussionPage() {
                 value={newFeedbackContent}
                 onChange={(e) => setNewFeedbackContent(e.target.value)}
                 placeholder="질문을 어떻게 보완하면 대화가 더 풍성해질까요?"
-                className="flex-1 px-3.5 py-2.5 bg-background border border-card-border rounded-xl text-[11px] font-semibold focus:outline-none focus:border-sage-medium placeholder:text-foreground/30"
-                maxLength={80}
+                className="flex-1 px-3.5 py-2.5 bg-background border border-card-border rounded-xl text-[11px] font-semibold focus:outline-none focus:border-sage-medium placeholder:text-foreground/30 text-foreground disabled:opacity-60"
+                maxLength={100}
+                disabled={isFeedbackSubmitting}
                 required
               />
               <button
                 type="submit"
-                className="px-4.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl flex justify-center items-center shadow-sm"
+                disabled={isFeedbackSubmitting}
+                className="px-4.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl flex justify-center items-center shadow-sm transition-colors disabled:opacity-60"
               >
                 <Send size={13} />
               </button>

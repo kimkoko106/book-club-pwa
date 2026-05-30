@@ -32,6 +32,19 @@ const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
 export const isMockMode = !supabaseUrl || !supabaseAnonKey || process.env.NEXT_PUBLIC_USE_MOCK === 'true';
 export const supabase = !isMockMode ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
+// Supabase API 타임아웃 래퍼 (기본 5초)
+export async function withTimeout<T>(promise: Promise<T>, ms = 5000, message?: string): Promise<T> {
+  let timeoutId: any;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(message || `API Timeout of ${ms}ms exceeded`));
+    }, ms);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timeoutId);
+  });
+}
+
 const KEY_CURRENT_USER = 'bookclub_mock_user';
 const KEY_PROFILES = 'bookclub_mock_profiles';
 const KEY_CLUBS = 'bookclub_mock_clubs';
@@ -275,6 +288,40 @@ export const mockApi = {
   auth: {
     getUser: async () => {
       if (typeof window === 'undefined') return { data: { user: null } };
+
+      if (!isMockMode && supabase) {
+        try {
+          const { data: { user }, error } = await supabase.auth.getUser();
+          if (error || !user) return { data: { user: null } };
+
+          // public.profiles 테이블에서 해당 유저의 닉네임/아바타를 결합해 반환
+          const { data: profile, error: profError } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .maybeSingle();
+
+          if (profError) {
+            console.warn('[Auth] Profiles 테이블 조회 오류:', profError);
+          }
+
+          // UI에 필요한 username과 avatar_url을 담아서 user를 가공해 전달
+          const mergedUser = {
+            id: user.id,
+            email: user.email,
+            username: profile?.username || user.email?.split('@')[0] || '이름없음',
+            avatar_url: profile?.avatar_url || '',
+            updated_at: profile?.updated_at || user.updated_at
+          };
+
+          return { data: { user: mergedUser } };
+        } catch (err) {
+          console.error('[Auth] getUser 에러:', err);
+          return { data: { user: null } };
+        }
+      }
+
+      // 로컬 Mock 모드
       try {
         const userJson = localStorage.getItem(KEY_CURRENT_USER);
         if (!userJson || userJson === 'undefined' || userJson === 'null') {
@@ -287,7 +334,58 @@ export const mockApi = {
         return { data: { user: null } };
       }
     },
-    signIn: async (username: string) => {
+    signIn: async (usernameOrEmail: string, password?: string, isSignUp?: boolean, nickname?: string) => {
+      if (!isMockMode && supabase) {
+        try {
+          if (isSignUp) {
+            // 회원가입
+            const { data, error } = await supabase.auth.signUp({
+              email: usernameOrEmail,
+              password: password!,
+              options: {
+                data: {
+                  username: nickname || usernameOrEmail.split('@')[0],
+                  nickname: nickname || usernameOrEmail.split('@')[0]
+                }
+              }
+            });
+            
+            if (error) throw error;
+
+            // 회원가입 성공 시 profiles 에 row가 없을 수 있으므로 직접 보정 (트리거가 작동하지 않을 경우 대비)
+            if (data?.user) {
+              const uid = data.user.id;
+              const { data: prof } = await supabase.from('profiles').select('id').eq('id', uid).maybeSingle();
+              if (!prof) {
+                await supabase.from('profiles').insert({
+                  id: uid,
+                  username: nickname || usernameOrEmail.split('@')[0],
+                  avatar_url: `https://images.unsplash.com/photo-${1500000000000 + Math.floor(Math.random() * 999999)}?w=100&auto=format&fit=crop&q=80`,
+                  updated_at: new Date().toISOString()
+                });
+              }
+            }
+
+            return { data: { user: data.user }, error: null };
+          } else {
+            // 로그인
+            const { data, error } = await supabase.auth.signInWithPassword({
+              email: usernameOrEmail,
+              password: password!
+            });
+
+            if (error) throw error;
+
+            return { data: { user: data.user }, error: null };
+          }
+        } catch (err: any) {
+          console.error('[Auth] signIn/signUp 실패:', err);
+          return { data: null, error: err };
+        }
+      }
+
+      // 로컬 Mock 모드
+      const username = usernameOrEmail; // Mock 모드에선 이메일 필드가 곧 닉네임으로 사용됨
       const profiles = getStorageItem<Profile>(KEY_PROFILES);
       let profile = profiles.find(p => p.username === username);
       
@@ -310,6 +408,17 @@ export const mockApi = {
       return { data: { user: profile }, error: null };
     },
     signOut: async () => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase.auth.signOut();
+          return { error };
+        } catch (err: any) {
+          console.error('[Auth] signOut 실패:', err);
+          return { error: err };
+        }
+      }
+
+      // 로컬 Mock 모드
       try {
         localStorage.removeItem(KEY_CURRENT_USER);
       } catch (err) {
@@ -321,6 +430,34 @@ export const mockApi = {
 
   clubs: {
     getMyClubs: async (userId: string): Promise<BookClub[]> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('group_members')
+            .select(`
+              group_id,
+              groups (
+                id,
+                title,
+                description,
+                invite_code,
+                created_at,
+                created_by
+              )
+            `)
+            .eq('user_id', userId);
+
+          if (error) throw error;
+          return (data || [])
+            .map((item: any) => item.groups)
+            .filter((g: any) => g !== null) as BookClub[];
+        } catch (err) {
+          console.error('Error fetching my clubs from Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드
       const members = getStorageItem<ClubMember>(KEY_MEMBERS);
       const clubs = getStorageItem<BookClub>(KEY_CLUBS);
       
@@ -328,6 +465,216 @@ export const mockApi = {
       return clubs.filter(c => myClubIds.includes(c.id));
     },
     createClub: async (userId: string, title: string, description: string, bookTitle: string, bookAuthor: string, totalPages: number): Promise<BookClub> => {
+      // 오늘 날짜 및 30일 뒤 날짜 계산 헬퍼
+      const today = new Date();
+      const after30Days = new Date();
+      after30Days.setDate(today.getDate() + 30);
+
+      const formatDate = (d: Date) => d.toISOString().split('T')[0];
+      const formatMonth = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      const formatRange = (d1: Date, d2: Date) => {
+        const f = (d: Date) => `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+        return `${f(d1)}~${f(d2)}`;
+      };
+
+      // 세부 타임라인 분배 (독서 15일, 질문 10일, 토론 5일)
+      const rStart = new Date(today);
+      const rEnd = new Date(today);
+      rEnd.setDate(today.getDate() + 14);
+
+      const qStart = new Date(today);
+      qStart.setDate(today.getDate() + 15);
+      const qEnd = new Date(today);
+      qEnd.setDate(today.getDate() + 24);
+
+      const dStart = new Date(today);
+      dStart.setDate(today.getDate() + 25);
+      const dEnd = new Date(today);
+      dEnd.setDate(today.getDate() + 29);
+
+      const timelineReading = formatRange(rStart, rEnd);
+      const timelineQuestion = formatRange(qStart, qEnd);
+      const timelineDiscussion = formatRange(dStart, dEnd);
+
+      if (!isMockMode && supabase) {
+        console.log('[Debug] createClub 시작 - userId:', userId);
+        
+        // profiles 존재를 검증하고 누락 시 자동 생성(복구)해 주는 헬퍼 함수
+        const ensureProfileExists = async (uid: string): Promise<void> => {
+          console.log('[Debug] 0. profiles 존재 여부 검증 시작 - uid:', uid);
+          const { data: prof, error: checkError } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('id', uid)
+            .maybeSingle();
+
+          if (checkError) {
+            console.warn('[Debug Warning] profiles 조회 중 경고 발생:', checkError);
+          }
+
+          if (!prof) {
+            console.log('[Debug] profiles 내 사용자 레코드가 누락되었습니다. 자동 복구를 시작합니다...');
+            const { data: authData } = await supabase.auth.getUser();
+            const user = authData?.user;
+            const fallbackUsername = user?.user_metadata?.username || user?.user_metadata?.nickname || `user_${uid.substring(0, 8)}`;
+            const fallbackAvatar = user?.user_metadata?.avatar_url || '';
+
+            const { error: insertError } = await supabase
+              .from('profiles')
+              .insert({
+                id: uid,
+                username: fallbackUsername,
+                avatar_url: fallbackAvatar,
+                updated_at: new Date().toISOString()
+              });
+
+            if (insertError) {
+              console.error('[Debug Error] profiles 자동 복구 실패:', insertError);
+              throw new Error(`[Step 0: 프로필 복구 실패] Profiles 테이블 누락 자동 생성을 실패했습니다. Code: ${insertError.code}, Message: ${insertError.message}`);
+            }
+            console.log('[Debug] profiles 자동 복구 완료 (row 신규 생성)');
+          } else {
+            console.log('[Debug] profiles 내 레코드 존재 확인 완료.');
+          }
+        };
+
+        try {
+          // 0. profiles 존재성 강제 보장 실행
+          await ensureProfileExists(userId);
+
+          // 8, 9. 현재 auth session 및 user id와 profiles 관계 사전 검증
+          const { data: authData, error: authCheckError } = await supabase.auth.getUser();
+          console.log('[Debug] auth.getUser() 결과:', { user: authData?.user?.id, error: authCheckError });
+
+          if (authData?.user?.id !== userId) {
+            console.error('[Debug Error] 매개변수 userId와 세션 uid가 불일치합니다:', { param: userId, session: authData?.user?.id });
+          }
+
+          // 1. 초대 코드 생성
+          const inviteCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+          console.log('[Debug] 생성된 초대 코드:', inviteCode);
+
+          // 2. groups에 삽입
+          console.log('[Debug] 1. groups 테이블 insert 시도...');
+          const { data: group, error: groupError } = await supabase
+            .from('groups')
+            .insert({
+              title,
+              description,
+              invite_code: inviteCode,
+              type: 'group',
+              visibility: 'group',
+              created_by: userId
+            })
+            .select('*')
+            .single();
+
+          if (groupError) {
+            console.error('[Debug Error] groups insert 실패:', groupError);
+            throw new Error(`[Step 1: groups 테이블 삽입 실패] Code: ${groupError.code}, Message: ${groupError.message}, Details: ${groupError.details || '없음'}, Hint: ${groupError.hint || '없음'}`);
+          }
+          console.log('[Debug] groups insert 성공 - group_id:', group.id);
+
+          // 3. group_members에 방장 추가
+          console.log('[Debug] 2. group_members 테이블 insert 시도...');
+          const { error: memberError } = await supabase
+            .from('group_members')
+            .insert({
+              group_id: group.id,
+              user_id: userId,
+              role: 'admin'
+            });
+
+          if (memberError) {
+            console.error('[Debug Error] group_members insert 실패:', memberError);
+            throw new Error(`[Step 2: group_members 테이블 삽입 실패] Code: ${memberError.code}, Message: ${memberError.message}, Details: ${memberError.details || '없음'}, Hint: ${memberError.hint || '없음'}`);
+          }
+          console.log('[Debug] group_members insert 성공 (admin 가입 완료)');
+
+          // 4. books 테이블 중복 확인 및 삽입
+          console.log('[Debug] 3. books 테이블 중복 체크 시도...');
+          const { data: existingBooks, error: searchError } = await supabase
+            .from('books')
+            .select('id')
+            .eq('title', bookTitle.trim())
+            .eq('author', bookAuthor.trim());
+
+          if (searchError) {
+            console.error('[Debug Error] books select 실패:', searchError);
+            throw new Error(`[Step 3-A: books 조회 실패] Code: ${searchError.code}, Message: ${searchError.message}, Details: ${searchError.details || '없음'}`);
+          }
+
+          let bookId = '';
+          if (existingBooks && existingBooks.length > 0) {
+            bookId = existingBooks[0].id;
+            console.log('[Debug] 기존에 등록된 마스터 도서 발견 - bookId:', bookId);
+          } else {
+            console.log('[Debug] 마스터 도서 미존재, books 테이블 insert 시도...');
+            const { data: newBook, error: insertBookError } = await supabase
+              .from('books')
+              .insert({
+                title: bookTitle.trim(),
+                author: bookAuthor.trim(),
+                total_pages: totalPages,
+                cover_url: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80'
+              })
+              .select('id')
+              .single();
+
+            if (insertBookError) {
+              console.error('[Debug Error] books insert 실패:', insertBookError);
+              throw new Error(`[Step 3-B: books 신규 삽입 실패] Code: ${insertBookError.code}, Message: ${insertBookError.message}, Details: ${insertBookError.details || '없음'}`);
+            }
+            bookId = newBook.id;
+            console.log('[Debug] books 신규 insert 성공 - bookId:', bookId);
+          }
+
+          // 5. monthly_books 에 연계 등록
+          console.log('[Debug] 4. monthly_books 테이블 insert 시도...');
+          const currentMonth = formatMonth(today);
+          const { error: monthlyBookError } = await supabase
+            .from('monthly_books')
+            .insert({
+              group_id: group.id,
+              book_id: bookId,
+              month: currentMonth,
+              stage: 'reading',
+              timeline_reading: timelineReading,
+              timeline_question: timelineQuestion,
+              timeline_discussion: timelineDiscussion
+            });
+
+          if (monthlyBookError) {
+            console.error('[Debug Error] monthly_books insert 실패:', monthlyBookError);
+            throw new Error(`[Step 4: monthly_books 테이블 삽입 실패] Code: ${monthlyBookError.code}, Message: ${monthlyBookError.message}, Details: ${monthlyBookError.details || '없음'}`);
+          }
+          console.log('[Debug] monthly_books insert 성공');
+
+          // 6. 로컬스토리지에도 신규 방의 독서 단계(reading) 및 타임라인 동기화 저장
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(`bookclub_start_date_${group.id}`, formatDate(today));
+            localStorage.setItem(`bookclub_end_date_${group.id}`, formatDate(after30Days));
+            localStorage.setItem(`bookclub_q_days_${group.id}`, '10');
+            localStorage.setItem(`bookclub_t_days_${group.id}`, '5');
+            localStorage.setItem(`bookclub_mock_club_stage_${group.id}`, 'reading');
+          }
+
+          return {
+            id: group.id,
+            title: group.title,
+            description: group.description,
+            invite_code: group.invite_code || '',
+            created_at: group.created_at,
+            created_by: group.created_by
+          } as BookClub;
+
+        } catch (err) {
+          console.error('[Debug Error] createClub 전체 흐름 중 예외 포착:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
       const clubs = getStorageItem<BookClub>(KEY_CLUBS);
       const members = getStorageItem<ClubMember>(KEY_MEMBERS);
       const books = getStorageItem<Book>(KEY_BOOKS);
@@ -365,10 +712,74 @@ export const mockApi = {
       };
       books.push(newBook);
       setStorageItem(KEY_BOOKS, books);
+
+      // 로컬 mock 모드에서도 동일하게 시작일/종료일/기본 단계를 보장 저장
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(`bookclub_start_date_${newClub.id}`, formatDate(today));
+        localStorage.setItem(`bookclub_end_date_${newClub.id}`, formatDate(after30Days));
+        localStorage.setItem(`bookclub_q_days_${newClub.id}`, '10');
+        localStorage.setItem(`bookclub_t_days_${newClub.id}`, '5');
+        localStorage.setItem(`bookclub_mock_club_stage_${newClub.id}`, 'reading');
+      }
       
       return newClub;
     },
     joinClubByCode: async (userId: string, inviteCode: string): Promise<BookClub | null> => {
+      if (!isMockMode && supabase) {
+        try {
+          // .single() 대신 .maybeSingle()을 사용하여 0건 조회 시 406/PGRST116 에러 방지
+          const { data: group, error: groupError } = await supabase
+            .from('groups')
+            .select('*')
+            .eq('invite_code', inviteCode.trim().toUpperCase())
+            .maybeSingle();
+
+          if (groupError) {
+            console.error('[Debug Error] 초대코드로 그룹 조회 실패:', groupError);
+            throw groupError;
+          }
+
+          if (!group) {
+            console.log(`[Debug] 입력한 초대코드 [${inviteCode}]와 매칭되는 그룹을 찾지 못함 (null)`);
+            return null;
+          }
+
+          const { data: member, error: memberError } = await supabase
+            .from('group_members')
+            .select('id')
+            .eq('group_id', group.id)
+            .eq('user_id', userId);
+
+          if (memberError) throw memberError;
+
+          if (!member || member.length === 0) {
+            const { error: joinError } = await supabase
+              .from('group_members')
+              .insert({
+                group_id: group.id,
+                user_id: userId,
+                role: 'member'
+              });
+
+            if (joinError) throw joinError;
+          }
+
+          return {
+            id: group.id,
+            title: group.title,
+            description: group.description,
+            invite_code: group.invite_code || '',
+            created_at: group.created_at,
+            created_by: group.created_by
+          } as BookClub;
+
+        } catch (err) {
+          console.error('Error joining club in Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드
       const clubs = getStorageItem<BookClub>(KEY_CLUBS);
       const members = getStorageItem<ClubMember>(KEY_MEMBERS);
       
@@ -389,18 +800,962 @@ export const mockApi = {
       }
       
       return targetClub;
+    },
+
+    getMonthlyBook: async (clubId: string): Promise<any | null> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('monthly_books')
+            .select(`
+              *,
+              books (
+                id,
+                title,
+                author,
+                total_pages,
+                cover_url,
+                created_at
+              )
+            `)
+            .eq('group_id', clubId)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (error) throw error;
+          if (!data || data.length === 0) return null;
+          return data[0];
+        } catch (err) {
+          console.error('[DB] getMonthlyBook 에러:', err);
+          return null;
+        }
+      }
+
+      // 로컬 Mock 모드
+      const books = getStorageItem<Book>(KEY_BOOKS);
+      const matchedBook = books.find(b => b.club_id === clubId) || null;
+      if (!matchedBook) return null;
+
+      const stage = localStorage.getItem(`bookclub_mock_club_stage_${clubId}`) || 'reading';
+      let dbStage = 'reading';
+      if (stage === 'question_collecting') dbStage = 'question';
+      else if (stage === 'discussion') dbStage = 'discussion';
+      else if (stage === 'archiving') dbStage = 'recap';
+
+      const timelineReading = localStorage.getItem(`bookclub_start_date_${clubId}`) && localStorage.getItem(`bookclub_end_date_${clubId}`)
+        ? `${localStorage.getItem(`bookclub_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_end_date_${clubId}`)}`
+        : '2026-05-01~2026-05-14';
+      
+      const timelineQuestion = localStorage.getItem(`bookclub_q_start_date_${clubId}`) && localStorage.getItem(`bookclub_q_end_date_${clubId}`)
+        ? `${localStorage.getItem(`bookclub_q_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_q_end_date_${clubId}`)}`
+        : null;
+
+      const timelineDiscussion = localStorage.getItem(`bookclub_t_start_date_${clubId}`) && localStorage.getItem(`bookclub_t_end_date_${clubId}`)
+        ? `${localStorage.getItem(`bookclub_t_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_t_end_date_${clubId}`)}`
+        : null;
+
+      return {
+        id: 'monthly-mock-' + clubId,
+        group_id: clubId,
+        book_id: matchedBook.id,
+        month: '2026-05',
+        stage: dbStage,
+        timeline_reading: timelineReading,
+        timeline_question: timelineQuestion,
+        timeline_discussion: timelineDiscussion,
+        books: matchedBook
+      };
+    },
+
+    updateMonthlyBook: async (
+      clubId: string, 
+      data: { 
+        book_id?: string; 
+        stage?: 'reading' | 'question' | 'discussion' | 'recap';
+        timeline_reading?: string | null;
+        timeline_question?: string | null;
+        timeline_discussion?: string | null;
+      }
+    ): Promise<void> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data: latest, error: findError } = await supabase
+            .from('monthly_books')
+            .select('id')
+            .eq('group_id', clubId)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (findError) throw findError;
+
+          if (latest && latest.length > 0) {
+            const { error: updateError } = await supabase
+              .from('monthly_books')
+              .update(data)
+              .eq('id', latest[0].id);
+
+            if (updateError) throw updateError;
+          } else {
+            const { error: insertError } = await supabase
+              .from('monthly_books')
+              .insert({
+                group_id: clubId,
+                book_id: data.book_id || '',
+                month: new Date().toISOString().substring(0, 7),
+                stage: data.stage || 'reading',
+                timeline_reading: data.timeline_reading || null,
+                timeline_question: data.timeline_question || null,
+                timeline_discussion: data.timeline_discussion || null
+              });
+
+            if (insertError) throw insertError;
+          }
+        } catch (err) {
+          console.error('[DB] updateMonthlyBook 에러:', err);
+          throw err;
+        }
+        return;
+      }
+
+      // 로컬 Mock 모드
+      if (data.stage) {
+        let uiStage = 'reading';
+        if (data.stage === 'question') uiStage = 'question_collecting';
+        else if (data.stage === 'discussion') uiStage = 'discussion';
+        else if (data.stage === 'recap') uiStage = 'archiving';
+        localStorage.setItem(`bookclub_mock_club_stage_${clubId}`, uiStage);
+      }
+      if (data.timeline_reading) {
+        const parts = data.timeline_reading.split('~');
+        if (parts.length === 2) {
+          localStorage.setItem(`bookclub_start_date_${clubId}`, parts[0]);
+          localStorage.setItem(`bookclub_end_date_${clubId}`, parts[1]);
+        }
+      }
+      if (data.timeline_question) {
+        const parts = data.timeline_question.split('~');
+        if (parts.length === 2) {
+          localStorage.setItem(`bookclub_q_start_date_${clubId}`, parts[0]);
+          localStorage.setItem(`bookclub_q_end_date_${clubId}`, parts[1]);
+        }
+      }
+      if (data.timeline_discussion) {
+        const parts = data.timeline_discussion.split('~');
+        if (parts.length === 2) {
+          localStorage.setItem(`bookclub_t_start_date_${clubId}`, parts[0]);
+          localStorage.setItem(`bookclub_t_end_date_${clubId}`, parts[1]);
+        }
+      }
+    },
+
+    // 다음 도서 최종 선정 (새로운 monthly_books row 누적 생성 및 아카이브 유지)
+    selectNextBook: async (
+      clubId: string, 
+      bookData: { 
+        title: string; 
+        author: string; 
+        cover_url?: string; 
+        total_pages: number; 
+      }
+    ): Promise<void> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data: existingBooks, error: searchError } = await supabase
+            .from('books')
+            .select('id')
+            .eq('title', bookData.title.trim())
+            .eq('author', bookData.author.trim());
+
+          if (searchError) throw searchError;
+
+          let bookId = '';
+          if (existingBooks && existingBooks.length > 0) {
+            bookId = existingBooks[0].id;
+          } else {
+            const { data: newBook, error: insertBookError } = await supabase
+              .from('books')
+              .insert({
+                title: bookData.title.trim(),
+                author: bookData.author.trim(),
+                cover_url: bookData.cover_url || '',
+                total_pages: bookData.total_pages
+              })
+              .select('id')
+              .single();
+
+            if (insertBookError) throw insertBookError;
+            bookId = newBook.id;
+          }
+
+          const today = new Date();
+          const after30Days = new Date();
+          after30Days.setDate(today.getDate() + 30);
+          const formatDate = (d: Date) => d.toISOString().split('T')[0];
+
+          const { error: insertMbError } = await supabase
+            .from('monthly_books')
+            .insert({
+              group_id: clubId,
+              book_id: bookId,
+              month: today.toISOString().substring(0, 7),
+              stage: 'reading',
+              timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+              timeline_question: null,
+              timeline_discussion: null
+            });
+
+          if (insertMbError) throw insertMbError;
+
+          const { data: members, error: mError } = await supabase
+            .from('group_members')
+            .select('user_id')
+            .eq('group_id', clubId);
+
+          if (mError) throw mError;
+
+          if (members && members.length > 0) {
+            for (const m of members) {
+              const { data: exists } = await supabase
+                .from('user_books')
+                .select('id')
+                .eq('user_id', m.user_id)
+                .eq('book_id', bookId)
+                .maybeSingle();
+
+              if (!exists) {
+                await supabase
+                  .from('user_books')
+                  .insert({
+                    user_id: m.user_id,
+                    book_id: bookId,
+                    status: 'reading',
+                    current_page: 0,
+                    is_recommended: false
+                  });
+              } else {
+                await supabase
+                  .from('user_books')
+                  .update({
+                    status: 'reading',
+                    current_page: 0
+                  })
+                  .eq('id', exists.id);
+              }
+            }
+          }
+        } catch (err) {
+          console.warn('[DB] selectNextBook 에러:', err);
+          throw err;
+        }
+        return;
+      }
+
+      if (typeof window === 'undefined') return;
+      try {
+        const booksList = getStorageItem<Book>(KEY_BOOKS);
+        let matchedBook = booksList.find(b => 
+          b.title.trim().toLowerCase() === bookData.title.trim().toLowerCase() &&
+          b.author.trim().toLowerCase() === bookData.author.trim().toLowerCase()
+        );
+
+        if (!matchedBook) {
+          matchedBook = {
+            id: 'book-' + Date.now(),
+            club_id: clubId,
+            title: bookData.title.trim(),
+            author: bookData.author.trim(),
+            total_pages: bookData.total_pages,
+            cover_url: bookData.cover_url || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80',
+            created_at: new Date().toISOString()
+          };
+          booksList.push(matchedBook);
+          setStorageItem(KEY_BOOKS, booksList);
+        }
+
+        const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+        const storedMb = localStorage.getItem(KEY_MONTHLY_BOOKS);
+        const mbList = storedMb ? JSON.parse(storedMb) : [];
+        
+        const today = new Date();
+        const after30Days = new Date();
+        after30Days.setDate(today.getDate() + 30);
+        const formatDate = (d: Date) => d.toISOString().split('T')[0];
+
+        const newMb = {
+          id: 'monthly-mock-' + Date.now(),
+          group_id: clubId,
+          book_id: matchedBook.id,
+          month: today.toISOString().substring(0, 7),
+          stage: 'reading',
+          timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+          timeline_question: null,
+          timeline_discussion: null,
+          books: matchedBook
+        };
+        
+        mbList.unshift(newMb);
+        localStorage.setItem(KEY_MONTHLY_BOOKS, JSON.stringify(mbList));
+
+        const KEY_PROGRESS = 'bookclub_mock_progress';
+        const storedProg = localStorage.getItem(KEY_PROGRESS);
+        const progList = storedProg ? JSON.parse(storedProg) : [];
+        
+        const resetProgress = progList.map((p: any) => {
+          if (p.book_id === 'book-1' || p.book_id === matchedBook?.id) {
+            return {
+              ...p,
+              current_page: 0,
+              status: 'reading',
+              updated_at: new Date().toISOString()
+            };
+          }
+          return p;
+        });
+        localStorage.setItem(KEY_PROGRESS, JSON.stringify(resetProgress));
+
+        localStorage.setItem(`bookclub_mock_club_stage_${clubId}`, 'reading');
+        localStorage.setItem(`bookclub_start_date_${clubId}`, formatDate(today));
+        localStorage.setItem(`bookclub_end_date_${clubId}`, formatDate(after30Days));
+      } catch (err) {
+        console.warn('Mock selectNextBook error:', err);
+        throw err;
+      }
     }
   },
 
   books: {
     getByClub: async (clubId: string): Promise<Book | null> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('monthly_books')
+            .select(`
+              book_id,
+              books (
+                id,
+                title,
+                author,
+                total_pages,
+                cover_url,
+                created_at
+              )
+            `)
+            .eq('group_id', clubId)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+          if (error) throw error;
+          if (!data || data.length === 0) return null;
+
+          const b = (data[0] as any).books;
+          if (!b) return null;
+
+          return {
+            id: b.id,
+            club_id: clubId,
+            title: b.title,
+            author: b.author,
+            total_pages: b.total_pages,
+            cover_url: b.cover_url || '',
+            created_at: b.created_at
+          } as Book;
+        } catch (err) {
+          console.error('Error fetching club book from Supabase:', err);
+          return null;
+        }
+      }
+
+      // 로컬 Mock 모드
       const books = getStorageItem<Book>(KEY_BOOKS);
       return books.find(b => b.club_id === clubId) || null;
+    },
+    getUserBooks: async (userId: string): Promise<any[]> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await withTimeout<any>(
+            Promise.resolve(
+              supabase
+                .from('user_books')
+                .select(`
+                  id,
+                  status,
+                  current_page,
+                  is_recommended,
+                  recommend_type,
+                  recommend_comment,
+                  books (
+                    id,
+                    title,
+                    author,
+                    total_pages,
+                    cover_url
+                  ),
+                  user_book_memos (
+                    id
+                  )
+                `)
+                .eq('user_id', userId)
+            ),
+            5000,
+            'Supabase user_books fetch timed out'
+          );
+
+          if (error) throw error;
+
+          return (data || []).map((ub: any) => {
+            let uiStatus: 'reading' | 'completed' | 'wish' = 'reading';
+            if (ub.status === 'completed') uiStatus = 'completed';
+            else if (ub.status === 'wished' || ub.status === 'wish' || ub.status === 'want_to_read') uiStatus = 'wish';
+
+            const bookInfo = ub.books || { title: '제목 없음', author: '저자 미상', cover_url: '', total_pages: 100 };
+            const progressPercent = bookInfo.total_pages > 0
+              ? Math.round((ub.current_page / bookInfo.total_pages) * 100)
+              : 0;
+
+            return {
+              id: ub.id,
+              title: bookInfo.title,
+              author: bookInfo.author,
+              cover_url: bookInfo.cover_url || '',
+              status: uiStatus,
+              progress: uiStatus === 'reading' ? Math.min(100, Math.max(0, progressPercent)) : undefined,
+              is_recommended: ub.is_recommended,
+              memo_count: ub.user_book_memos ? ub.user_book_memos.length : 0,
+              completed_date: uiStatus === 'completed' ? '최근 완독' : undefined
+            };
+          });
+        } catch (err) {
+          console.error('Error fetching user books from Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return [];
+      try {
+        const storedBooks = localStorage.getItem('bookclub_personal_shelf');
+        if (storedBooks) {
+          return JSON.parse(storedBooks);
+        }
+        return [];
+      } catch (err) {
+        console.error('Error loading mock user books from localStorage:', err);
+        return [];
+      }
+    },
+
+    addBookToShelf: async (
+      userId: string, 
+      bookData: { title: string; author: string; cover_url?: string; status: 'reading' | 'completed' | 'wish'; progress: number }
+    ): Promise<any> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data: existingBooks, error: searchError } = await supabase
+            .from('books')
+            .select('id, total_pages')
+            .eq('title', bookData.title.trim())
+            .eq('author', bookData.author.trim());
+
+          if (searchError) throw searchError;
+
+          let bookId = '';
+          let totalPages = 300;
+
+          if (existingBooks && existingBooks.length > 0) {
+            bookId = existingBooks[0].id;
+            totalPages = existingBooks[0].total_pages;
+          } else {
+            const { data: newBook, error: insertBookError } = await supabase
+              .from('books')
+              .insert({
+                title: bookData.title.trim(),
+                author: bookData.author.trim(),
+                cover_url: bookData.cover_url || '',
+                total_pages: totalPages
+              })
+              .select('id, total_pages')
+              .single();
+
+            if (insertBookError) throw insertBookError;
+            bookId = newBook.id;
+            totalPages = newBook.total_pages;
+          }
+
+          const { data: userBookExists, error: checkUserBookError } = await supabase
+            .from('user_books')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('book_id', bookId);
+
+          if (checkUserBookError) throw checkUserBookError;
+
+          if (userBookExists && userBookExists.length > 0) {
+            throw new Error('이미 내 책장에 담긴 책이에요.');
+          }
+
+          let dbStatus: 'reading' | 'completed' | 'wished' = 'reading';
+          if (bookData.status === 'completed') dbStatus = 'completed';
+          else if (bookData.status === 'wish') dbStatus = 'wished';
+
+          let currentPage = 0;
+          if (dbStatus === 'completed') {
+            currentPage = totalPages;
+          } else if (dbStatus === 'reading') {
+            currentPage = Math.round((bookData.progress / 100) * totalPages);
+          }
+
+          const { data: newUserBook, error: insertUserBookError } = await supabase
+            .from('user_books')
+            .insert({
+              user_id: userId,
+              book_id: bookId,
+              status: dbStatus,
+              current_page: currentPage,
+              is_recommended: false
+            })
+            .select('id')
+            .single();
+
+          if (insertUserBookError) throw insertUserBookError;
+          return newUserBook;
+        } catch (err) {
+          console.error('Error adding book to shelf in Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return null;
+      try {
+        const storedBooks = localStorage.getItem('bookclub_personal_shelf');
+        const shelfBooks = storedBooks ? JSON.parse(storedBooks) : [];
+
+        const isDuplicate = shelfBooks.some(
+          (b: any) => b.title.trim().toLowerCase() === bookData.title.trim().toLowerCase() && 
+                      b.author.trim().toLowerCase() === bookData.author.trim().toLowerCase()
+        );
+        if (isDuplicate) {
+          throw new Error('이미 내 책장에 담긴 책이에요.');
+        }
+
+        const newBook = {
+          id: 'shelf-' + Date.now(),
+          title: bookData.title.trim(),
+          author: bookData.author.trim(),
+          cover_url: bookData.cover_url || '',
+          status: bookData.status,
+          progress: bookData.status === 'reading' ? bookData.progress : undefined,
+          completed_date: bookData.status === 'completed' ? new Date().toISOString().split('T')[0].replace(/-/g, '.') : undefined,
+          is_recommended: false,
+          memo_count: 0
+        };
+
+        const updated = [newBook, ...shelfBooks];
+        localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updated));
+        return newBook;
+      } catch (err) {
+        console.error('Error adding mock book to shelf:', err);
+        throw err;
+      }
+    },
+
+    updateUserBook: async (
+      userId: string,
+      shelfBookId: string,
+      updateData: { title?: string; author?: string; cover_url?: string; status: 'reading' | 'completed' | 'wish'; progress: number }
+    ): Promise<any> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data: userBook, error: fetchError } = await supabase
+            .from('user_books')
+            .select(`
+              id,
+              book_id,
+              books (
+                total_pages
+              )
+            `)
+            .eq('id', shelfBookId)
+            .single();
+
+          if (fetchError) throw fetchError;
+          if (!userBook) throw new Error('책을 찾을 수 없습니다.');
+
+          const bookId = userBook.book_id;
+          const totalPages = (userBook.books as any)?.total_pages || 300;
+
+          let dbStatus: 'reading' | 'completed' | 'wished' = 'reading';
+          if (updateData.status === 'completed') dbStatus = 'completed';
+          else if (updateData.status === 'wish') dbStatus = 'wished';
+
+          let currentPage = 0;
+          if (dbStatus === 'completed') {
+            currentPage = totalPages;
+          } else if (dbStatus === 'reading') {
+            currentPage = Math.round((updateData.progress / 100) * totalPages);
+          }
+
+          const { error: updateUserBookError } = await supabase
+            .from('user_books')
+            .update({
+              status: dbStatus,
+              current_page: currentPage
+            })
+            .eq('id', shelfBookId)
+            .eq('user_id', userId);
+
+          if (updateUserBookError) throw updateUserBookError;
+
+          if (updateData.title || updateData.author) {
+            const updateFields: any = {};
+            if (updateData.title) updateFields.title = updateData.title.trim();
+            if (updateData.author) updateFields.author = updateData.author.trim();
+            if (updateData.cover_url !== undefined) updateFields.cover_url = updateData.cover_url;
+
+            const { error: updateBookError } = await supabase
+              .from('books')
+              .update(updateFields)
+              .eq('id', bookId);
+
+            if (updateBookError) {
+              console.warn('마스터 도서 정보 업데이트 실패:', updateBookError);
+            }
+          }
+
+          return { success: true };
+        } catch (err) {
+          console.error('Error updating book in Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return null;
+      try {
+        const storedBooks = localStorage.getItem('bookclub_personal_shelf');
+        const shelfBooks = storedBooks ? JSON.parse(storedBooks) : [];
+
+        const updatedShelf = shelfBooks.map((b: any) => {
+          if (b.id === shelfBookId) {
+            return {
+              ...b,
+              title: updateData.title?.trim() || b.title,
+              author: updateData.author?.trim() || b.author,
+              cover_url: updateData.cover_url !== undefined ? updateData.cover_url : b.cover_url,
+              status: updateData.status,
+              progress: updateData.status === 'reading' ? updateData.progress : undefined,
+              completed_date: updateData.status === 'completed' ? (b.completed_date || new Date().toISOString().split('T')[0].replace(/-/g, '.')) : undefined
+            };
+          }
+          return b;
+        });
+
+        localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+        return { success: true };
+      } catch (err) {
+        console.error('Error updating mock book:', err);
+        throw err;
+      }
+    },
+
+    deleteUserBook: async (userId: string, shelfBookId: string): Promise<any> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('user_books')
+            .delete()
+            .eq('id', shelfBookId)
+            .eq('user_id', userId);
+
+          if (error) throw error;
+          return { success: true };
+        } catch (err) {
+          console.error('Error deleting book in Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return null;
+      try {
+        const storedBooks = localStorage.getItem('bookclub_personal_shelf');
+        const shelfBooks = storedBooks ? JSON.parse(storedBooks) : [];
+        const updatedShelf = shelfBooks.filter((b: any) => b.id !== shelfBookId);
+        localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+        return { success: true };
+      } catch (err) {
+        console.error('Error deleting mock book:', err);
+        throw err;
+      }
+    },
+
+    getUserBookMemos: async (userBookId: string): Promise<any[]> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('user_book_memos')
+            .select('id, page, content, created_at')
+            .eq('user_book_id', userBookId)
+            .order('created_at', { ascending: false });
+
+          if (error) throw error;
+          
+          return (data || []).map((m: any) => ({
+            id: m.id,
+            bookId: userBookId,
+            page: m.page ? String(m.page) : undefined,
+            content: m.content,
+            created_at: new Date(m.created_at).toISOString().split('T')[0].replace(/-/g, '.')
+          }));
+        } catch (err) {
+          console.error('Error fetching user book memos from Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return [];
+      try {
+        const storedMemos = localStorage.getItem('bookclub_personal_memos');
+        const memos = storedMemos ? JSON.parse(storedMemos) : [];
+        return memos
+          .filter((m: any) => m.bookId === userBookId)
+          .sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      } catch (err) {
+        console.error('Error loading mock user book memos:', err);
+        return [];
+      }
+    },
+
+    addUserBookMemo: async (
+      userBookId: string, 
+      memoData: { page?: number; content: string }
+    ): Promise<any> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('user_book_memos')
+            .insert({
+              user_book_id: userBookId,
+              page: memoData.page || null,
+              content: memoData.content
+            })
+            .select('id, page, content, created_at')
+            .single();
+
+          if (error) throw error;
+          return {
+            id: data.id,
+            bookId: userBookId,
+            page: data.page ? String(data.page) : undefined,
+            content: data.content,
+            created_at: new Date(data.created_at).toISOString().split('T')[0].replace(/-/g, '.')
+          };
+        } catch (err) {
+          console.error('Error adding user book memo in Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return null;
+      try {
+        const storedMemos = localStorage.getItem('bookclub_personal_memos');
+        const memos = storedMemos ? JSON.parse(storedMemos) : [];
+
+        const newMemo = {
+          id: 'memo-' + Date.now(),
+          bookId: userBookId,
+          page: memoData.page ? String(memoData.page) : undefined,
+          content: memoData.content,
+          created_at: new Date().toISOString().split('T')[0].replace(/-/g, '.')
+        };
+
+        const updated = [newMemo, ...memos];
+        localStorage.setItem('bookclub_personal_memos', JSON.stringify(updated));
+
+        const storedShelf = localStorage.getItem('bookclub_personal_shelf');
+        if (storedShelf) {
+          const shelf = JSON.parse(storedShelf);
+          const updatedShelf = shelf.map((b: any) => {
+            if (b.id === userBookId) {
+              return { ...b, memo_count: (b.memo_count || 0) + 1 };
+            }
+            return b;
+          });
+          localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+        }
+
+        return newMemo;
+      } catch (err) {
+        console.error('Error adding mock memo:', err);
+        throw err;
+      }
+    },
+
+    updateUserBookMemo: async (
+      memoId: string, 
+      memoData: { page?: number; content: string }
+    ): Promise<any> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('user_book_memos')
+            .update({
+              page: memoData.page || null,
+              content: memoData.content
+            })
+            .eq('id', memoId);
+
+          if (error) throw error;
+          return { success: true };
+        } catch (err) {
+          console.error('Error updating user book memo in Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return null;
+      try {
+        const storedMemos = localStorage.getItem('bookclub_personal_memos');
+        const memos = storedMemos ? JSON.parse(storedMemos) : [];
+
+        const updated = memos.map((m: any) => {
+          if (m.id === memoId) {
+            return {
+              ...m,
+              page: memoData.page ? String(memoData.page) : undefined,
+              content: memoData.content
+            };
+          }
+          return m;
+        });
+
+        localStorage.setItem('bookclub_personal_memos', JSON.stringify(updated));
+        return { success: true };
+      } catch (err) {
+        console.error('Error updating mock memo:', err);
+        throw err;
+      }
+    },
+
+    deleteUserBookMemo: async (memoId: string, userBookId?: string): Promise<any> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('user_book_memos')
+            .delete()
+            .eq('id', memoId);
+
+          if (error) throw error;
+          return { success: true };
+        } catch (err) {
+          console.error('Error deleting user book memo in Supabase:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return null;
+      try {
+        const storedMemos = localStorage.getItem('bookclub_personal_memos');
+        const memos = storedMemos ? JSON.parse(storedMemos) : [];
+        const updated = memos.filter((m: any) => m.id !== memoId);
+        localStorage.setItem('bookclub_personal_memos', JSON.stringify(updated));
+
+        if (userBookId) {
+          const storedShelf = localStorage.getItem('bookclub_personal_shelf');
+          if (storedShelf) {
+            const shelf = JSON.parse(storedShelf);
+            const updatedShelf = shelf.map((b: any) => {
+              if (b.id === userBookId) {
+                return { ...b, memo_count: Math.max(0, (b.memo_count || 1) - 1) };
+              }
+              return b;
+            });
+            localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+          }
+        }
+
+        return { success: true };
+      } catch (err) {
+        console.error('Error deleting mock memo:', err);
+        throw err;
+      }
     }
   },
 
   progress: {
     getMemberProgressList: async (clubId: string, bookId: string): Promise<UserBookProgress[]> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data: membersData, error: membersError } = await supabase
+            .from('group_members')
+            .select('user_id')
+            .eq('group_id', clubId);
+
+          if (membersError) throw membersError;
+          const userIds = (membersData || []).map(m => m.user_id);
+          if (userIds.length === 0) return [];
+
+          const { data: userBooksData, error: ubError } = await supabase
+            .from('user_books')
+            .select('id, user_id, status, current_page, updated_at')
+            .eq('book_id', bookId)
+            .in('user_id', userIds);
+
+          if (ubError) throw ubError;
+
+          const ubMap = new Map<string, any>();
+          (userBooksData || []).forEach((ub: any) => {
+            ubMap.set(ub.user_id, ub);
+          });
+
+          const { data: profilesData, error: profError } = await supabase
+            .from('profiles')
+            .select('id, username, avatar_url, updated_at')
+            .in('id', userIds);
+
+          if (profError) throw profError;
+
+          const profMap = new Map<string, any>();
+          (profilesData || []).forEach((p: any) => {
+            profMap.set(p.id, p);
+          });
+
+          return userIds.map(uid => {
+            const ub = ubMap.get(uid);
+            const prof = profMap.get(uid) || { id: uid, username: '알 수 없음', avatar_url: '' };
+
+            let uiStatus: 'reading' | 'completed' | 'paused' = 'reading';
+            if (ub) {
+              if (ub.status === 'completed') uiStatus = 'completed';
+              else if (ub.status === 'wished' || ub.status === 'wish') uiStatus = 'paused';
+            }
+
+            return {
+              id: ub?.id || `dummy-prog-${uid}`,
+              user_id: uid,
+              book_id: bookId,
+              current_page: ub?.current_page || 0,
+              status: uiStatus,
+              updated_at: ub?.updated_at || new Date().toISOString(),
+              profile: {
+                id: prof.id,
+                username: prof.username,
+                avatar_url: prof.avatar_url || '',
+                updated_at: prof.updated_at || new Date().toISOString()
+              }
+            } as UserBookProgress;
+          });
+        } catch (err) {
+          console.error('Error fetching member progress from Supabase:', err);
+          return [];
+        }
+      }
+
+      // 로컬 Mock 모드
       const members = getStorageItem<ClubMember>(KEY_MEMBERS);
       const progresses = getStorageItem<UserBookProgress>(KEY_PROGRESS);
       const profiles = getStorageItem<Profile>(KEY_PROFILES);
@@ -460,6 +1815,55 @@ export const mockApi = {
   discussion: {
     // 특정 모임 및 도서의 전체 질문 조회
     getQuestions: async (clubId: string, bookId: string): Promise<DiscussionQuestion[]> => {
+      const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+
+      if (!isMockMode && supabase) {
+        if (!isValidUUID(clubId) || !isValidUUID(bookId)) {
+          console.warn('[DB] getQuestions: clubId or bookId is not a valid UUID. Skipping query to prevent syntax error.', { clubId, bookId });
+          return [];
+        }
+
+        try {
+          const { data, error } = await supabase
+            .from('questions')
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              ),
+              feedback_count:question_feedback(count)
+            `)
+            .eq('group_id', clubId)
+            .eq('book_id', bookId)
+            .order('created_at', { ascending: false });
+
+          if (error) {
+            console.warn('[DB] getQuestions Supabase Query Warning:', {
+              code: error.code,
+              message: error.message,
+              details: error.details,
+              hint: error.hint
+            });
+            return [];
+          }
+          
+          return (data || []).map(q => ({
+            ...q,
+            club_id: q.group_id,
+            comments_count: (q.feedback_count as any)?.[0]?.count || 0
+          })) as any[];
+        } catch (err: any) {
+          console.warn('[DB] getQuestions Catch Exception:', {
+            message: err?.message || err,
+            stack: err?.stack
+          });
+          return [];
+        }
+      }
+
       const questions = getStorageItem<DiscussionQuestion>(KEY_DISCUSSIONS);
       const profiles = getStorageItem<Profile>(KEY_PROFILES);
 
@@ -475,6 +1879,36 @@ export const mockApi = {
 
     // 질문 상세 조회
     getQuestionById: async (questionId: string): Promise<DiscussionQuestion | null> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('questions')
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              ),
+              feedback_count:question_feedback(count)
+            `)
+            .eq('id', questionId)
+            .maybeSingle();
+
+          if (error) throw error;
+          if (!data) return null;
+          return {
+            ...data,
+            club_id: data.group_id,
+            comments_count: (data.feedback_count as any)?.[0]?.count || 0
+          } as any;
+        } catch (err) {
+          console.error('[DB] getQuestionById 에러:', err);
+          return null;
+        }
+      }
+
       const questions = getStorageItem<DiscussionQuestion>(KEY_DISCUSSIONS);
       const profiles = getStorageItem<Profile>(KEY_PROFILES);
       const q = questions.find(item => item.id === questionId);
@@ -486,6 +1920,43 @@ export const mockApi = {
 
     // 새 질문 제안 등록
     createQuestion: async (userId: string, clubId: string, bookId: string, content: string): Promise<DiscussionQuestion> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('questions')
+            .insert({
+              group_id: clubId,
+              book_id: bookId,
+              user_id: userId,
+              content,
+              status: 'suggested',
+              is_spoiler: false,
+              reaction_curious_count: 0,
+              reaction_talk_count: 0
+            })
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              )
+            `)
+            .single();
+
+          if (error) throw error;
+          return {
+            ...data,
+            club_id: data.group_id,
+            comments_count: 0
+          } as any;
+        } catch (err) {
+          console.error('[DB] createQuestion 에러:', err);
+          throw err;
+        }
+      }
+
       const questions = getStorageItem<DiscussionQuestion>(KEY_DISCUSSIONS);
       const newQ: DiscussionQuestion = {
         id: 'q-' + Date.now(),
@@ -505,24 +1976,367 @@ export const mockApi = {
       return newQ;
     },
 
-    // 질문에 대한 반응(나도 궁금해요, 이야기하고 싶어요) 증가
+    // 질문에 대한 반응(나도 궁금해요, 이야기하고 싶어요) 증가/감소 (토글식 및 중복 방지)
     addReaction: async (questionId: string, type: 'curious' | 'talk'): Promise<DiscussionQuestion | null> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data: authData } = await supabase.auth.getUser();
+          const user = authData?.user;
+          if (!user) throw new Error('로그인이 필요합니다.');
+
+          const userId = user.id;
+          const reactionType = type; // curious or talk
+
+          // 1. 이미 반응을 남겼는지 체크
+          const { data: existing, error: checkError } = await supabase
+            .from('question_reactions')
+            .select('id')
+            .eq('question_id', questionId)
+            .eq('user_id', userId)
+            .eq('reaction_type', reactionType)
+            .maybeSingle();
+
+          if (checkError) throw checkError;
+
+          let diff = 0;
+          if (existing) {
+            // 반응 제거 (토글 오프)
+            const { error: deleteError } = await supabase
+              .from('question_reactions')
+              .delete()
+              .eq('id', existing.id);
+
+            if (deleteError) throw deleteError;
+            diff = -1;
+          } else {
+            // 반응 등록 (토글 온)
+            const { error: insertError } = await supabase
+              .from('question_reactions')
+              .insert({
+                question_id: questionId,
+                user_id: userId,
+                reaction_type: reactionType
+              });
+
+            if (insertError) throw insertError;
+            diff = 1;
+          }
+
+          // 2. questions 테이블의 공감 카운트 업데이트
+          const { data: currentQ, error: getQError } = await supabase
+            .from('questions')
+            .select('reaction_curious_count, reaction_talk_count')
+            .eq('id', questionId)
+            .single();
+
+          if (getQError) throw getQError;
+
+          let newCurious = currentQ.reaction_curious_count;
+          let newTalk = currentQ.reaction_talk_count;
+
+          if (type === 'curious') {
+            newCurious = Math.max(0, newCurious + diff);
+          } else {
+            newTalk = Math.max(0, newTalk + diff);
+          }
+
+          const { data: updatedQ, error: updateQError } = await supabase
+            .from('questions')
+            .update({
+              reaction_curious_count: newCurious,
+              reaction_talk_count: newTalk
+            })
+            .eq('id', questionId)
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              )
+            `)
+            .single();
+
+          if (updateQError) throw updateQError;
+          return {
+            ...updatedQ,
+            club_id: updatedQ.group_id,
+            comments_count: 0
+          } as any;
+        } catch (err) {
+          console.error('[DB] addReaction 에러:', err);
+          throw err;
+        }
+      }
+
       const questions = getStorageItem<DiscussionQuestion>(KEY_DISCUSSIONS);
       const index = questions.findIndex(q => q.id === questionId);
       if (index === -1) return null;
 
+      // Mock 모드에서도 간단히 토글 흉내
+      const reactionKey = `bookclub_mock_react_${questionId}_${type}`;
+      const alreadyReacted = localStorage.getItem(reactionKey) === 'true';
+
       if (type === 'curious') {
-        questions[index].reaction_curious_count += 1;
+        if (alreadyReacted) {
+          questions[index].reaction_curious_count = Math.max(0, questions[index].reaction_curious_count - 1);
+          localStorage.removeItem(reactionKey);
+        } else {
+          questions[index].reaction_curious_count += 1;
+          localStorage.setItem(reactionKey, 'true');
+        }
       } else {
-        questions[index].reaction_talk_count += 1;
+        if (alreadyReacted) {
+          questions[index].reaction_talk_count = Math.max(0, questions[index].reaction_talk_count - 1);
+          localStorage.removeItem(reactionKey);
+        } else {
+          questions[index].reaction_talk_count += 1;
+          localStorage.setItem(reactionKey, 'true');
+        }
       }
 
       setStorageItem(KEY_DISCUSSIONS, questions);
       return questions[index];
     },
 
+    // 질문 선정 상태 변경 (status: 'suggested' | 'selected')
+    updateQuestionStatus: async (questionId: string, status: 'suggested' | 'selected'): Promise<void> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('questions')
+            .update({ status })
+            .eq('id', questionId);
+          if (error) throw error;
+        } catch (err) {
+          console.error('[DB] updateQuestionStatus 에러:', err);
+          throw err;
+        }
+        return;
+      }
+      
+      const questions = getStorageItem<DiscussionQuestion>(KEY_DISCUSSIONS);
+      const index = questions.findIndex(q => q.id === questionId);
+      if (index > -1) {
+        questions[index].status = status;
+        setStorageItem(KEY_DISCUSSIONS, questions);
+      }
+    },
+
+    // 특정 질문의 피드백(의견 메모) 목록 조회
+    getFeedbacks: async (questionId: string): Promise<any[]> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('question_feedback')
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              )
+            `)
+            .eq('question_id', questionId)
+            .order('created_at', { ascending: true });
+
+          if (error) throw error;
+          return data || [];
+        } catch (err) {
+          console.error('[DB] getFeedbacks 에러:', err);
+          return [];
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return [];
+      try {
+        const KEY_FEEDBACKS = 'bookclub_mock_feedbacks';
+        const stored = localStorage.getItem(KEY_FEEDBACKS);
+        const allFeedbacks = stored ? JSON.parse(stored) : {};
+        const feedbacks = allFeedbacks[questionId] || [];
+        
+        // Mock 프로필 목록과 조인
+        const profiles = getStorageItem<Profile>(KEY_PROFILES);
+        return feedbacks.map((f: any, idx: number) => {
+          // 문자열 배열이었던 기존 더미 호환
+          if (typeof f === 'string') {
+            const isMe = idx % 2 === 0;
+            const dummyUserId = isMe ? 'user-1' : 'user-2';
+            const profile = profiles.find(p => p.id === dummyUserId) || { id: dummyUserId, username: '독서가', avatar_url: '' };
+            return {
+              id: `fb-mock-${questionId}-${idx}`,
+              question_id: questionId,
+              user_id: dummyUserId,
+              content: f,
+              created_at: new Date(Date.now() - (10 - idx) * 3600000).toISOString(),
+              profile
+            };
+          }
+          const profile = profiles.find(p => p.id === f.user_id) || { id: f.user_id, username: '독서가', avatar_url: '' };
+          return { ...f, profile };
+        });
+      } catch (err) {
+        console.error('Mock feedbacks load error:', err);
+        return [];
+      }
+    },
+
+    // 질문 피드백 등록
+    createFeedback: async (userId: string, questionId: string, content: string): Promise<any> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('question_feedback')
+            .insert({
+              question_id: questionId,
+              user_id: userId,
+              content
+            })
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              )
+            `)
+            .single();
+
+          if (error) throw error;
+          return data;
+        } catch (err) {
+          console.warn('[DB] createFeedback 에러:', err);
+          throw err;
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      const KEY_FEEDBACKS = 'bookclub_mock_feedbacks';
+      const stored = typeof window !== 'undefined' ? localStorage.getItem(KEY_FEEDBACKS) : null;
+      const allFeedbacks = stored ? JSON.parse(stored) : {};
+      if (!allFeedbacks[questionId]) {
+        allFeedbacks[questionId] = [];
+      }
+      
+      const profiles = getStorageItem<Profile>(KEY_PROFILES);
+      const profile = profiles.find(p => p.id === userId) || { id: userId, username: '독서가', avatar_url: '' };
+      
+      const newFeedback = {
+        id: 'fb-mock-' + Date.now(),
+        question_id: questionId,
+        user_id: userId,
+        content,
+        created_at: new Date().toISOString(),
+        profile
+      };
+      
+      allFeedbacks[questionId].push(newFeedback);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(KEY_FEEDBACKS, JSON.stringify(allFeedbacks));
+      }
+      return newFeedback;
+    },
+
+    // 질문 피드백 수정
+    updateFeedback: async (feedbackId: string, content: string): Promise<void> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('question_feedback')
+            .update({ content })
+            .eq('id', feedbackId);
+          if (error) throw error;
+        } catch (err) {
+          console.warn('[DB] updateFeedback 에러:', err);
+          throw err;
+        }
+        return;
+      }
+
+      // 로컬 Mock 모드 대응
+      const KEY_FEEDBACKS = 'bookclub_mock_feedbacks';
+      const stored = typeof window !== 'undefined' ? localStorage.getItem(KEY_FEEDBACKS) : null;
+      if (stored) {
+        const allFeedbacks = JSON.parse(stored);
+        for (const qId in allFeedbacks) {
+          const arr = allFeedbacks[qId];
+          const idx = arr.findIndex((f: any) => f && f.id === feedbackId);
+          if (idx > -1) {
+            arr[idx].content = content;
+            if (typeof window !== 'undefined') {
+              localStorage.setItem(KEY_FEEDBACKS, JSON.stringify(allFeedbacks));
+            }
+            break;
+          }
+        }
+      }
+    },
+
+    // 질문 피드백 삭제
+    deleteFeedback: async (feedbackId: string): Promise<void> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('question_feedback')
+            .delete()
+            .eq('id', feedbackId);
+          if (error) throw error;
+        } catch (err) {
+          console.warn('[DB] deleteFeedback 에러:', err);
+          throw err;
+        }
+        return;
+      }
+
+      // 로컬 Mock 모드 대응
+      const KEY_FEEDBACKS = 'bookclub_mock_feedbacks';
+      const stored = typeof window !== 'undefined' ? localStorage.getItem(KEY_FEEDBACKS) : null;
+      if (stored) {
+        const allFeedbacks = JSON.parse(stored);
+        for (const qId in allFeedbacks) {
+          const arr = allFeedbacks[qId];
+          const idx = arr.findIndex((f: any) => f && f.id === feedbackId);
+          if (idx > -1) {
+            arr.splice(idx, 1);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem(KEY_FEEDBACKS, JSON.stringify(allFeedbacks));
+            }
+            break;
+          }
+        }
+      }
+    },
+
     // 특정 질문의 댓글 목록 조회
     getComments: async (questionId: string): Promise<DiscussionComment[]> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('discussion_comments')
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              )
+            `)
+            .eq('question_id', questionId)
+            .order('created_at', { ascending: true });
+
+          if (error) throw error;
+          return data || [];
+        } catch (err) {
+          console.warn('[DB] getComments 에러:', err);
+          return [];
+        }
+      }
+
       const comments = getStorageItem<DiscussionComment>(KEY_COMMENTS);
       const profiles = getStorageItem<Profile>(KEY_PROFILES);
 
@@ -537,6 +2351,34 @@ export const mockApi = {
 
     // 새 댓글 남기기
     createComment: async (userId: string, questionId: string, content: string): Promise<DiscussionComment> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('discussion_comments')
+            .insert({
+              question_id: questionId,
+              user_id: userId,
+              content
+            })
+            .select(`
+              *,
+              profile:profiles (
+                id,
+                username,
+                avatar_url,
+                updated_at
+              )
+            `)
+            .single();
+
+          if (error) throw error;
+          return data;
+        } catch (err) {
+          console.warn('[DB] createComment 에러:', err);
+          throw err;
+        }
+      }
+
       const comments = getStorageItem<DiscussionComment>(KEY_COMMENTS);
       const questions = getStorageItem<DiscussionQuestion>(KEY_DISCUSSIONS);
       
@@ -553,13 +2395,306 @@ export const mockApi = {
       // 질문 카드 내 댓글 카운트 증가
       const qIndex = questions.findIndex(q => q.id === questionId);
       if (qIndex > -1) {
-        questions[qIndex].comments_count += 1;
+        questions[qIndex].comments_count = (questions[qIndex].comments_count || 0) + 1;
         setStorageItem(KEY_DISCUSSIONS, questions);
       }
 
       const profiles = getStorageItem<Profile>(KEY_PROFILES);
       newComment.profile = profiles.find(p => p.id === userId);
       return newComment;
+    },
+
+    // 댓글 수정
+    updateComment: async (commentId: string, content: string): Promise<void> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('discussion_comments')
+            .update({ content })
+            .eq('id', commentId);
+          if (error) throw error;
+        } catch (err) {
+          console.warn('[DB] updateComment 에러:', err);
+          throw err;
+        }
+        return;
+      }
+
+      const comments = getStorageItem<DiscussionComment>(KEY_COMMENTS);
+      const idx = comments.findIndex(c => c.id === commentId);
+      if (idx > -1) {
+        comments[idx].content = content;
+        setStorageItem(KEY_COMMENTS, comments);
+      }
+    },
+
+    // 댓글 삭제
+    deleteComment: async (commentId: string): Promise<void> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { error } = await supabase
+            .from('discussion_comments')
+            .delete()
+            .eq('id', commentId);
+          if (error) throw error;
+        } catch (err) {
+          console.warn('[DB] deleteComment 에러:', err);
+          throw err;
+        }
+        return;
+      }
+
+      const comments = getStorageItem<DiscussionComment>(KEY_COMMENTS);
+      const idx = comments.findIndex(c => c.id === commentId);
+      if (idx > -1) {
+        comments.splice(idx, 1);
+        setStorageItem(KEY_COMMENTS, comments);
+      }
+    },
+
+    // 지난 독서 아카이브 리스트 조회
+    getArchiveList: async (clubId: string): Promise<any[]> => {
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('monthly_books')
+            .select(`
+              id,
+              month,
+              stage,
+              timeline_reading,
+              books (
+                id,
+                title,
+                author,
+                cover_url
+              )
+            `)
+            .eq('group_id', clubId)
+            .order('created_at', { ascending: false });
+
+          if (error) throw error;
+          
+          return (data || []).map((mb: any) => {
+            const b = mb.books || { title: '제목 없음', author: '저자 미상', cover_url: '' };
+            const parts = mb.month.split('-');
+            const yearStr = parts[0];
+            const monthStr = parts[1] ? `${parseInt(parts[1])}월` : '';
+            
+            return {
+              id: mb.id,
+              year: yearStr,
+              month: `${yearStr}년 ${monthStr}`,
+              title: b.title,
+              author: b.author,
+              coverUrl: b.cover_url || '',
+              atmosphere: `“이 소설에 담긴 뜻을 오래 사색하며 나누었던 달”`,
+              tags: ['사색과기록', '지난이야기']
+            };
+          });
+        } catch (err) {
+          console.warn('[DB] getArchiveList 에러:', err);
+          return [];
+        }
+      }
+
+      // 로컬 Mock 모드 대응
+      if (typeof window === 'undefined') return [];
+      try {
+        const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+        const stored = localStorage.getItem(KEY_MONTHLY_BOOKS);
+        const list = stored ? JSON.parse(stored) : [];
+        if (list.length === 0) {
+          const defaultList = [
+            {
+              id: 'report-4',
+              year: '2026',
+              month: '2026년 4월',
+              title: '모순',
+              author: '양귀자',
+              coverUrl: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=150&auto=format&fit=crop&q=80',
+              atmosphere: '“관계와 현실의 선택에 대해 오래 대화 나누었던 달”',
+              tags: ['선택과책임', '삶의이면']
+            },
+            {
+              id: 'report-3',
+              year: '2026',
+              month: '2026년 3월',
+              title: '아몬드',
+              author: '손원평',
+              coverUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=150&auto=format&fit=crop&q=80',
+              atmosphere: '“감정과 진정한 공감의 온기를 함께 나누었던 시간”',
+              tags: ['공감의온기', '타인의아픔']
+            }
+          ];
+          localStorage.setItem(KEY_MONTHLY_BOOKS, JSON.stringify(defaultList));
+          return defaultList;
+        }
+        return list;
+      } catch (err) {
+        console.warn('Mock archive load error:', err);
+        return [];
+      }
+    },
+
+    // 지난 독서 결산 상세 조회
+    getArchiveDetail: async (monthlyBookId: string): Promise<any | null> => {
+      const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-5][0-9a-f]{3}-[089ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+
+      if (!isMockMode && supabase) {
+        if (!isValidUUID(monthlyBookId)) {
+          console.warn('[DB] getArchiveDetail: invalid UUID. Skipping query.', monthlyBookId);
+          return null;
+        }
+
+        try {
+          const { data: mb, error: mbError } = await supabase
+            .from('monthly_books')
+            .select(`
+              *,
+              books (
+                id,
+                title,
+                author,
+                cover_url
+              )
+            `)
+            .eq('id', monthlyBookId)
+            .maybeSingle();
+
+          if (mbError) throw mbError;
+          if (!mb) return null;
+
+          const bookId = mb.book_id;
+          const clubId = mb.group_id;
+
+          const { data: questions, error: qError } = await supabase
+            .from('questions')
+            .select(`
+              id,
+              content,
+              created_at
+            `)
+            .eq('group_id', clubId)
+            .eq('book_id', bookId)
+            .order('created_at', { ascending: true });
+
+          if (qError) throw qError;
+
+          const qList = questions || [];
+          const qIds = qList.map(q => q.id);
+
+          let comments: any[] = [];
+          if (qIds.length > 0) {
+            const { data: cData, error: cError } = await supabase
+              .from('discussion_comments')
+              .select(`
+                *,
+                profile:profiles (
+                  id,
+                  username,
+                  avatar_url
+                )
+              `)
+              .in('question_id', qIds)
+              .order('created_at', { ascending: true });
+
+            if (cError) throw cError;
+            comments = cData || [];
+          }
+
+          const formattedQuestions = qList.map((q: any) => {
+            const qComments = comments.filter((c: any) => c.question_id === q.id);
+            return {
+              questionText: q.content,
+              commentCount: qComments.length,
+              comments: qComments.map((c: any) => {
+                const date = new Date(c.created_at);
+                const dateStr = `${date.getMonth() + 1}월 ${date.getDate()}일`;
+                return {
+                  author: c.profile?.username || '독서가',
+                  date: dateStr,
+                  content: c.content,
+                  avatarUrl: c.profile?.avatar_url || ''
+                };
+              })
+            };
+          });
+
+          const parts = mb.month.split('-');
+          const monthText = `${parts[0]}년 ${parts[1] ? parseInt(parts[1]) : ''}월`;
+          const bookInfo = mb.books || { title: '제목 없음', author: '저자 미상', cover_url: '' };
+
+          const { count: memberCount } = await supabase
+            .from('group_members')
+            .select('*', { count: 'exact', head: true })
+            .eq('group_id', clubId);
+
+          const totalComments = formattedQuestions.reduce((acc, cur) => acc + cur.commentCount, 0);
+
+          return {
+            month: monthText,
+            title: bookInfo.title,
+            author: bookInfo.author,
+            coverUrl: bookInfo.cover_url || '',
+            tags: ['사색과기록', '지난이야기'],
+            metaInfo: `질문 ${formattedQuestions.length}개 · 생각 메모 ${totalComments}개 · 함께 읽은 사람 ${memberCount || 1}명`,
+            questions: formattedQuestions
+          };
+        } catch (err) {
+          console.warn('[DB] getArchiveDetail 에러:', err);
+          return null;
+        }
+      }
+
+      const reportsData: Record<string, any> = {
+        'report-4': {
+          month: '2026년 4월',
+          title: '모순',
+          author: '양귀자',
+          coverUrl: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80',
+          tags: ['선택과책임', '삶의이면'],
+          metaInfo: '질문 3개 · 생각 메모 7개 · 함께 읽은 사람 3명',
+          questions: [
+            {
+              questionText: 'Q. 안진진이 낭만적인 김장우 대신 지루하리만치 반듯한 나영규와의 현실적인 연대를 선택한 것에 대해 어떻게 생각하시나요?',
+              commentCount: 3,
+              comments: [
+                { author: '지은', date: '4월 6일', content: '“김장우와의 쓸쓸한 연애가 주는 자유보다는 나영규와의 규칙적인 현실을 택한 건, 결국 불안한 자신의 삶을 보호하기 위한 서글픈 모순이라고 느껴져요. 안진진의 서글픈 현실감이 깊은 여운을 남겼습니다.”' },
+                { author: '민수', date: '4월 6일', content: '“저는 조금 다르게 봤어요. 낭만을 좇기보다 현실을 타협한 평범한 인간의 나약함이자, 동시에 가장 솔직한 생존 본능이 아닐까 싶네요. 우리의 매일도 이상과 밥그릇 사이에서 끊임없이 흔들리니까요.”' },
+                { author: '오후의 사색', date: '4월 7일', content: '“결국 나영규와의 숨 막히는 배려 속에서도 안진진은 새로운 결핍을 느끼게 될 거예요. 한쪽을 채우면 다른 쪽이 텅 비어버리는 것이 이 소설이 가리키는 궁극적인 모순이겠죠.”' }
+              ]
+            },
+            {
+              questionText: 'Q. 소설 속에서 풍요로웠으나 스스로 생을 놓은 이모와, 가난 속에서 억척스럽게 살아남은 엄마의 대비가 주는 메시지는 무엇일까요?',
+              commentCount: 2,
+              comments: [
+                { author: '소희', date: '4월 9일', content: '“이모의 완벽한 일상이 결국 변화와 소음이 통제된 무덤이었고, 엄마의 상처투성이 하루는 고통스럽지만 살아 꿈틀대는 푸른 숲 같았습니다. 삶의 불행조차 생명력의 일부임을 실감했습니다.”' },
+                { author: '준호', date: '4월 10일', content: '“풍요 속 빈곤이라는 역설적인 감각을 아주 극단적으로 구현해 낸 챕터라고 생각합니다. 타인의 삶을 밖에서만 비추어 보며 함부로 동경해서는 안 되겠다는 생각이 들었어요.”' }
+              ]
+            }
+          ]
+        },
+        'report-3': {
+          month: '2026년 3월',
+          title: '아몬드',
+          author: '손원평',
+          coverUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&auto=format&fit=crop&q=80',
+          tags: ['공감의온기', '타인의아픔'],
+          metaInfo: '질문 2개 · 생각 메모 4개 · 함께 읽은 사람 3명',
+          questions: [
+            {
+              questionText: 'Q. 감정을 전혀 느끼지 못하는 소년 윤재의 건조한 태도를 보며, 우리가 역설적으로 타인의 고통에서 느낀 진짜 감정의 무게는 어떠한가요?',
+              commentCount: 2,
+              comments: [
+                { author: '지은', date: '3월 5일', content: '“윤재가 곤이에게 투박하게 건넨 손길은 계산된 윤리가 아니었습니다. 그 무구하고 있는 그대로의 응시야말로 가식적인 위선이 가득한 우리의 공감을 뛰어넘는 진짜 온기였어요.”' },
+                { author: '민수', date: '3월 6일', content: '“현대 사회는 윤재의 감정 불능증보다, 감정을 멀쩡히 느끼면서도 타인의 외침을 뉴스 보듯 차갑게 외면하는 방관자들의 무서운 둔감함을 꼬집고 있습니다.”' }
+              ]
+            }
+          ]
+        }
+      };
+      return reportsData[monthlyBookId] || null;
     }
   }
 };
@@ -575,6 +2710,24 @@ export const checkIsCompleted = (userId: string | undefined): boolean => {
   } catch (err) {
     console.error('완독 상태 확인 에러:', err);
     return false;
+  }
+};
+
+export const clearSessionCache = () => {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+      // Supabase 관련 쿠키 등 제거
+      document.cookie.split(";").forEach((c) => {
+        document.cookie = c
+          .replace(/^ +/, "")
+          .replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+      });
+      console.log('[Auth] Session and cache cleared successfully.');
+    } catch (err) {
+      console.error('[Auth] Failed to clear session cache:', err);
+    }
   }
 };
 

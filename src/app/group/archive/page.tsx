@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { mockApi } from '../../../lib/supabase';
 import Navigation from '../../../components/Navigation';
-import { ArrowLeft, Sparkles, BookOpen, ChevronRight, ArrowUpRight } from 'lucide-react';
+import { ArrowLeft, ArrowUpRight } from 'lucide-react';
 
 interface ArchiveItem {
   id: string;
@@ -20,55 +20,9 @@ interface ArchiveItem {
 export default function ArchivePage() {
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  
-  // 1. 년도 필터링을 위한 선택 상태 정의 (기본값: '전체')
   const [selectedYear, setSelectedYear] = useState<string>('전체');
-  
+  const [archiveList, setArchiveList] = useState<ArchiveItem[]>([]);
   const router = useRouter();
-
-  // 확장된 독서 기록 더미 아카이브 데이터 (년도 필터 검증용)
-  const archiveData: ArchiveItem[] = [
-    {
-      id: 'report-4',
-      year: '2026',
-      month: '2026년 4월',
-      title: '모순',
-      author: '양귀자',
-      coverUrl: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=150&auto=format&fit=crop&q=80',
-      atmosphere: '“관계와 현실의 선택에 대해 오래 대화 나누었던 달”',
-      tags: ['선택과책임', '삶의이면']
-    },
-    {
-      id: 'report-3',
-      year: '2026',
-      month: '2026년 3월',
-      title: '아몬드',
-      author: '손원평',
-      coverUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=150&auto=format&fit=crop&q=80',
-      atmosphere: '“감정과 진정한 공감의 온기를 함께 나누었던 시간”',
-      tags: ['공감의온기', '타인의아픔']
-    },
-    {
-      id: 'report-2',
-      year: '2025',
-      month: '2025년 12월',
-      title: '어린 왕자',
-      author: '앙투안 드 생텍쥐페리',
-      coverUrl: 'https://images.unsplash.com/photo-1506880018603-83d5b814b5a6?w=150&auto=format&fit=crop&q=80',
-      atmosphere: '“길들인다는 의미와 잊혀진 마음의 동심을 복기한 계절”',
-      tags: ['어른과아이', '길들여짐']
-    },
-    {
-      id: 'report-1',
-      year: '2024',
-      month: '2024년 10월',
-      title: '호밀밭의 파수꾼',
-      author: 'J.D. 샐린저',
-      coverUrl: 'https://images.unsplash.com/photo-1497633762265-9d179a990aa6?w=150&auto=format&fit=crop&q=80',
-      atmosphere: '“위선적인 기성 사회 속 외로운 방황을 다정히 위로했던 밤”',
-      tags: ['청춘의방황', '순수함보호']
-    }
-  ];
 
   useEffect(() => {
     async function init() {
@@ -80,8 +34,16 @@ export default function ArchivePage() {
           return;
         }
         setCurrentUser(data.user);
+
+        // 사용자가 가입된 모임(그룹) 목록 가져오기
+        const myClubs = await mockApi.clubs.getMyClubs(data.user.id);
+        const activeClubId = myClubs.length > 0 ? myClubs[0].id : 'club-1';
+
+        // 해당 모임의 실 DB/Mock 아카이브 리스트 로드
+        const list = await mockApi.discussion.getArchiveList(activeClubId);
+        setArchiveList(list);
       } catch (err) {
-        console.error(err);
+        console.warn('[Archive] 로딩 오류:', err);
       } finally {
         setIsLoading(false);
       }
@@ -91,8 +53,12 @@ export default function ArchivePage() {
 
   // 필터링 적용된 목록
   const filteredData = selectedYear === '전체' 
-    ? archiveData 
-    : archiveData.filter(item => item.year === selectedYear);
+    ? archiveList 
+    : archiveList.filter(item => item.year === selectedYear);
+
+  // 동적으로 년도 필터 뽑기 (기본값 '전체'에다가 목록에 존재하는 년도들 유니크하게 추가)
+  const uniqueYears = Array.from(new Set(archiveList.map(item => item.year))).sort((a, b) => b.localeCompare(a));
+  const filterYears = ['전체', ...uniqueYears];
 
   if (isLoading) {
     return (
@@ -104,9 +70,6 @@ export default function ArchivePage() {
       </div>
     );
   }
-
-  // 필터 알약(Pill)들 정의
-  const filterYears = ['전체', '2026', '2025', '2024'];
 
   return (
     <div className="flex-1 flex flex-col justify-between p-6 bg-background">
@@ -144,33 +107,40 @@ export default function ArchivePage() {
           ))}
         </div>
 
-        {/* 정돈된 리스트 (카드 높이 축소, 정보 밀도 최적화, 가로형 독서 기록 앨범 느낌) */}
+        {/* 정돈된 리스트 */}
         <div className="flex flex-col gap-3.5 mt-1">
           {filteredData.length === 0 ? (
             <div className="bg-card-bg border border-card-border border-dashed rounded-2xl py-12 text-center text-xs text-foreground/30 font-medium">
-              해당 년도의 독서 기록이 존재하지 않습니다.
+              아직 남겨진 기록이 없어요.
             </div>
           ) : (
             filteredData.map((item) => (
               <div 
                 key={item.id}
                 onClick={() => {
-                  // report-4, report-3 의 상세 결산 리포트 연결
-                  if (item.id === 'report-4' || item.id === 'report-3') {
-                    router.push(`/group/archive/${item.id}`);
-                  } else {
-                    alert(`[${item.title}] 결산 상세 화면은 현재 데모 준비 중입니다. 2026년 결산 화면부터 탐색해 보세요! 📖`);
-                  }
+                  router.push(`/group/archive/${item.id}`);
                 }}
                 className="bg-card-bg border border-card-border rounded-2xl p-4 flex gap-4 shadow-sm items-center hover:border-sage-medium/50 cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
               >
-                {/* 1. 컴팩트한 책 표지 이미지 (고정 높이) */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img 
-                  src={item.coverUrl} 
-                  alt={item.title} 
-                  className="w-16 h-22 rounded-xl object-cover shadow border border-card-border/70 flex-shrink-0"
-                />
+                {/* 1. 책 표지 이미지 (표지가 없는 경우 감성 Placeholder) */}
+                {item.coverUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img 
+                    src={item.coverUrl} 
+                    alt={item.title} 
+                    className="w-16 h-22 rounded-xl object-cover shadow border border-card-border/70 flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-16 h-22 rounded-xl bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border/70 flex flex-col justify-between py-3 px-1.5 shadow flex-shrink-0 text-center select-none relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-1.5 h-full bg-sage-dark/10" />
+                    <span className="text-[10px] font-black text-sage-dark leading-tight line-clamp-2 w-full mt-1 px-1">
+                      {item.title}
+                    </span>
+                    <span className="text-[8px] font-extrabold text-sage-medium/95 truncate w-full px-1">
+                      {item.author || '지은이 미상'}
+                    </span>
+                  </div>
+                )}
 
                 {/* 2. 도서 정보 및 한줄 분위기 문장 */}
                 <div className="flex-1 flex flex-col justify-between h-20 min-w-0">

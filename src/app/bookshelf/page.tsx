@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi } from '../../lib/supabase';
+import { mockApi, isMockMode } from '../../lib/supabase';
 import Navigation from '../../components/Navigation';
 import { 
   Plus, 
@@ -29,6 +29,7 @@ interface ShelfBook {
   progress?: number; // 진행률 (읽는 중 상태일 때만)
   completed_date?: string; // 완독일 (다 읽음 상태일 때만)
   is_recommended: boolean; // 모임 추천 여부 배지
+  memo_count?: number; // 사색 메모 누적 개수
 }
 
 interface Memo {
@@ -39,43 +40,7 @@ interface Memo {
   created_at: string;
 }
 
-const INITIAL_SHELF: ShelfBook[] = [
-  {
-    id: 'shelf-1',
-    title: '월든 (Walden)',
-    author: '헨리 데이비드 소로',
-    cover_url: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80',
-    status: 'reading',
-    progress: 45,
-    is_recommended: true
-  },
-  {
-    id: 'shelf-2',
-    title: '모순',
-    author: '양귀자',
-    cover_url: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300&auto=format&fit=crop&q=80',
-    status: 'completed',
-    completed_date: '2026.04.28',
-    is_recommended: false
-  },
-  {
-    id: 'shelf-3',
-    title: '데미안 (Demian)',
-    author: '헤르만 헤세',
-    cover_url: 'https://images.unsplash.com/photo-1543002588-bfa74002ed7e?w=300&auto=format&fit=crop&q=80',
-    status: 'reading',
-    progress: 70,
-    is_recommended: false
-  },
-  {
-    id: 'shelf-4',
-    title: '아몬드',
-    author: '손원평',
-    cover_url: 'https://images.unsplash.com/photo-1589829085413-56de8ae18c73?w=300&auto=format&fit=crop&q=80',
-    status: 'wish',
-    is_recommended: false
-  }
-];
+const INITIAL_SHELF: ShelfBook[] = [];
 
 const INITIAL_MEMOS: Memo[] = [
   {
@@ -127,7 +92,30 @@ export default function PersonalBookshelfPage() {
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [shelfBooks, setShelfBooks] = useState<ShelfBook[]>([]);
-  const [memos, setMemos] = useState<Memo[]>([]);
+  const [bookMemosMap, setBookMemosMap] = useState<{ [bookId: string]: Memo[] }>({});
+  const [memoLoadings, setMemoLoadings] = useState<{ [bookId: string]: boolean }>({});
+  const [memoErrors, setMemoErrors] = useState<{ [bookId: string]: string }>({});
+
+  const [editingMemoId, setEditingMemoId] = useState<string | null>(null);
+  const [editMemoPage, setEditMemoPage] = useState('');
+  const [editMemoContent, setEditMemoContent] = useState('');
+
+  const [isMemoSubmitting, setIsMemoSubmitting] = useState(false);
+  const [memoSubmitError, setMemoSubmitError] = useState<{ [bookId: string]: string }>({});
+
+  // DB 읽기 상태관리용 신규 상태
+  const [isShelfLoading, setIsShelfLoading] = useState(false);
+  const [shelfErrorMsg, setShelfErrorMsg] = useState('');
+
+  // DB CUD 연동용 상태 추가
+  const [isAddBookLoading, setIsAddBookLoading] = useState(false);
+  const [addBookErrorMsg, setAddBookErrorMsg] = useState('');
+  
+  const [isEditBookLoading, setIsEditBookLoading] = useState(false);
+  const [editBookErrorMsg, setEditBookErrorMsg] = useState('');
+
+  const [isDeleteBookLoading, setIsDeleteBookLoading] = useState(false);
+  const [deleteBookErrorMsg, setDeleteBookErrorMsg] = useState('');
 
   // 탭 제어
   const [activeTab, setActiveTab] = useState<'reading' | 'completed' | 'wish'>('reading');
@@ -177,6 +165,25 @@ export default function PersonalBookshelfPage() {
   const [memoPage, setMemoPage] = useState('');
   const [memoContent, setMemoContent] = useState('');
 
+  // DB 및 로컬 책장 데이터 조회 함수
+  const loadShelfData = async (userId: string) => {
+    setIsShelfLoading(true);
+    setShelfErrorMsg('');
+    try {
+      // API(Supabase 또는 Mock) 호출을 통해 단일화된 조회 수행
+      const dbBooks = await mockApi.books.getUserBooks(userId);
+      setShelfBooks(dbBooks);
+      
+      // 기존 추가/수정/삭제 로컬 동작 시뮬레이션용 데이터가 로컬 스토리지에 유지되도록 동기화
+      localStorage.setItem('bookclub_personal_shelf', JSON.stringify(dbBooks));
+    } catch (err) {
+      console.error('책장 로딩 실패:', err);
+      setShelfErrorMsg('책장을 불러오지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsShelfLoading(false);
+    }
+  };
+
   // 1. 초기 로드
   useEffect(() => {
     async function init() {
@@ -188,23 +195,10 @@ export default function PersonalBookshelfPage() {
         }
         setCurrentUser(data.user);
 
-        // 로컬스토리지 책장 로드
-        const storedBooks = localStorage.getItem('bookclub_personal_shelf');
-        if (storedBooks) {
-          setShelfBooks(JSON.parse(storedBooks));
-        } else {
-          localStorage.setItem('bookclub_personal_shelf', JSON.stringify(INITIAL_SHELF));
-          setShelfBooks(INITIAL_SHELF);
-        }
+        // 실제 세션 유저 ID 기반으로 책장 로드 진행
+        await loadShelfData(data.user.id);
 
-        // 로컬스토리지 메모 로드
-        const storedMemos = localStorage.getItem('bookclub_personal_memos');
-        if (storedMemos) {
-          setMemos(JSON.parse(storedMemos));
-        } else {
-          localStorage.setItem('bookclub_personal_memos', JSON.stringify(INITIAL_MEMOS));
-          setMemos(INITIAL_MEMOS);
-        }
+
 
         // 로컬스토리지 모임 공유책 로드
         const storedMockBooks = localStorage.getItem('bookclub_mock_books');
@@ -292,51 +286,37 @@ export default function PersonalBookshelfPage() {
   };
 
   // 도서 정보 수정 처리 저장
-  const handleSaveEdit = (e: React.FormEvent) => {
+  const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeMenuBook) return;
+    if (!currentUser || !activeMenuBook) return;
     if (!editTitle.trim()) {
-      alert('책 제목을 입력해 주세요.');
+      setEditBookErrorMsg('책 제목을 입력해 주세요.');
       return;
     }
 
-    // 1. 책장 스토리지 업데이트 (공유책 매핑 방지 등 제목/저자가 바뀌면 추천 데이터에도 매칭 업데이트)
-    const updatedShelf = shelfBooks.map(b => {
-      if (b.id === activeMenuBook.id) {
-        return {
-          ...b,
-          title: editTitle.trim(),
-          author: editAuthor.trim() || '지은이 없음',
-          cover_url: editCoverUrl.trim(),
-          status: editStatus,
-          progress: editStatus === 'reading' ? Number(editProgress) : undefined,
-          completed_date: editStatus === 'completed' ? (b.completed_date || new Date().toISOString().split('T')[0].replace(/-/g, '.')) : undefined
-        };
-      }
-      return b;
-    });
-    setShelfBooks(updatedShelf);
-    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+    setIsEditBookLoading(true);
+    setEditBookErrorMsg('');
 
-    // 추천방 연동 정보의 제목/저자 및 표지도 함께 업데이트
-    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
-    if (storedCandidatesStr) {
-      let candidates = JSON.parse(storedCandidatesStr);
-      const matchedIndex = candidates.findIndex((c: any) => c.title === activeMenuBook.title && c.author === activeMenuBook.author);
-      if (matchedIndex > -1) {
-        candidates[matchedIndex] = {
-          ...candidates[matchedIndex],
-          title: editTitle.trim(),
-          author: editAuthor.trim() || '지은이 없음',
-          cover_url: editCoverUrl.trim()
-        };
-        localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(candidates));
-      }
+    try {
+      await mockApi.books.updateUserBook(currentUser.id, activeMenuBook.id, {
+        title: editTitle.trim(),
+        author: editAuthor.trim() || '지은이 없음',
+        cover_url: editCoverUrl.trim(),
+        status: editStatus,
+        progress: Number(editProgress)
+      });
+
+      // UI 갱신을 위해 데이터 재로드
+      await loadShelfData(currentUser.id);
+
+      setIsEditOpen(false);
+      setActiveMenuBook(null);
+    } catch (err: any) {
+      console.error('책 수정 실패:', err);
+      setEditBookErrorMsg(err.message || '책을 저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsEditBookLoading(false);
     }
-
-    setIsEditOpen(false);
-    setActiveMenuBook(null);
-    alert(`[${editTitle}] 도서 정보가 수정되었습니다.`);
   };
 
   // 모임 추천 수정 처리 저장
@@ -392,39 +372,32 @@ export default function PersonalBookshelfPage() {
   };
 
   // 도서 삭제 처리
-  const handleDeleteBook = () => {
-    if (!activeMenuBook) return;
+  const handleDeleteBook = async () => {
+    if (!currentUser || !activeMenuBook) return;
 
-    // 1. 책장에서 제외
-    const updatedShelf = shelfBooks.filter(b => b.id !== activeMenuBook.id);
-    setShelfBooks(updatedShelf);
-    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+    setIsDeleteBookLoading(true);
+    setDeleteBookErrorMsg('');
 
-    // 2. 연관 메모 일괄 제거
-    const storedMemos = localStorage.getItem('bookclub_personal_memos');
-    if (storedMemos) {
-      const memosList = JSON.parse(storedMemos);
-      const updatedMemos = memosList.filter((m: any) => m.bookId !== activeMenuBook.id);
-      setMemos(updatedMemos);
-      localStorage.setItem('bookclub_personal_memos', JSON.stringify(updatedMemos));
+    try {
+      await mockApi.books.deleteUserBook(currentUser.id, activeMenuBook.id);
+
+      // UI 목록에서 즉시 제거
+      setShelfBooks(prev => prev.filter(b => b.id !== activeMenuBook.id));
+
+      setIsDeleteOpen(false);
+      setActiveMenuBook(null);
+    } catch (err: any) {
+      console.error('책 삭제 실패:', err);
+      setDeleteBookErrorMsg(err.message || '책을 삭제하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsDeleteBookLoading(false);
     }
-
-    // 3. 모임 추천 기록도 제거
-    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
-    if (storedCandidatesStr) {
-      const candidates = JSON.parse(storedCandidatesStr);
-      const updatedCandidates = candidates.filter((c: any) => !(c.title === activeMenuBook.title && c.author === activeMenuBook.author));
-      localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(updatedCandidates));
-    }
-
-    setIsDeleteOpen(false);
-    setActiveMenuBook(null);
-    alert('책장에서 도서와 사색의 흔적들을 조용히 정리했습니다.');
   };
 
   // 3. 내 책장에 새 도서 등록
-  const handleAddBookToShelf = (e: React.FormEvent) => {
+  const handleAddBookToShelf = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!currentUser) return;
     
     let title = '';
     let author = '';
@@ -432,7 +405,7 @@ export default function PersonalBookshelfPage() {
 
     if (isDirectInput) {
       if (!directTitle.trim()) {
-        alert('책 제목을 입력해 주세요.');
+        setAddBookErrorMsg('책 제목을 입력해 주세요.');
         return;
       }
       title = directTitle.trim();
@@ -440,7 +413,7 @@ export default function PersonalBookshelfPage() {
       cover_url = directCoverUrl.trim();
     } else {
       if (!selectedAddBook) {
-        alert('등록할 책을 선택해 주세요.');
+        setAddBookErrorMsg('등록할 책을 선택해 주세요.');
         return;
       }
       title = selectedAddBook.title;
@@ -448,32 +421,37 @@ export default function PersonalBookshelfPage() {
       cover_url = selectedAddBook.cover_url;
     }
 
-    const newBook: ShelfBook = {
-      id: `shelf-${Date.now()}`,
-      title,
-      author,
-      cover_url,
-      status: addBookStatus,
-      progress: addBookStatus === 'reading' ? Number(addBookProgress) : undefined,
-      completed_date: addBookStatus === 'completed' ? new Date().toISOString().split('T')[0].replace(/-/g, '.') : undefined,
-      is_recommended: false
-    };
+    setIsAddBookLoading(true);
+    setAddBookErrorMsg('');
 
-    const updated = [newBook, ...shelfBooks];
-    setShelfBooks(updated);
-    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updated));
+    try {
+      await mockApi.books.addBookToShelf(currentUser.id, {
+        title,
+        author,
+        cover_url,
+        status: addBookStatus,
+        progress: Number(addBookProgress)
+      });
 
-    // 리셋
-    setSelectedAddBook(null);
-    setSearchQuery('');
-    setAddBookStatus('reading');
-    setAddBookProgress(0);
-    setIsDirectInput(false);
-    setDirectTitle('');
-    setDirectAuthor('');
-    setDirectCoverUrl('');
-    setIsAddBookModalOpen(false);
-    alert(`[${newBook.title}] 도서가 서재에 안전하게 꽂혔습니다.`);
+      // UI 갱신을 위해 데이터 재로드
+      await loadShelfData(currentUser.id);
+
+      // 리셋
+      setSelectedAddBook(null);
+      setSearchQuery('');
+      setAddBookStatus('reading');
+      setAddBookProgress(0);
+      setIsDirectInput(false);
+      setDirectTitle('');
+      setDirectAuthor('');
+      setDirectCoverUrl('');
+      setIsAddBookModalOpen(false);
+    } catch (err: any) {
+      console.error('책 추가 실패:', err);
+      setAddBookErrorMsg(err.message || '책을 저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsAddBookLoading(false);
+    }
   };
 
   // 4. 모임에 추천 등록 (실제 다음 책 후보방 연동)
@@ -522,26 +500,121 @@ export default function PersonalBookshelfPage() {
     alert(`[${selectedRecommendBook.title}] 도서가 '다음 책 후보방'에 성공적으로 추천되었습니다!`);
   };
 
+  // 특정 도서의 사색 메모 로드 함수
+  const loadMemosForBook = async (bookId: string) => {
+    setMemoLoadings(prev => ({ ...prev, [bookId]: true }));
+    setMemoErrors(prev => ({ ...prev, [bookId]: '' }));
+    try {
+      const dbMemos = await mockApi.books.getUserBookMemos(bookId);
+      setBookMemosMap(prev => ({ ...prev, [bookId]: dbMemos }));
+    } catch (err: any) {
+      console.error('메모 로드 실패:', err);
+      setMemoErrors(prev => ({ ...prev, [bookId]: '메모를 불러오지 못했어요. 잠시 후 다시 시도해주세요.' }));
+    } finally {
+      setMemoLoadings(prev => ({ ...prev, [bookId]: false }));
+    }
+  };
+
+  // 아코디언 토글 및 메모 로드 연동
+  const handleToggleAccordion = async (bookId: string) => {
+    const isExpanded = expandedBookId === bookId;
+    if (isExpanded) {
+      setExpandedBookId(null);
+    } else {
+      setExpandedBookId(bookId);
+      await loadMemosForBook(bookId);
+    }
+  };
+
   // 5. 독서 메모 등록
-  const handleAddMemo = (e: React.FormEvent, bookId: string) => {
+  const handleAddMemo = async (e: React.FormEvent, bookId: string) => {
     e.preventDefault();
     if (!memoContent.trim()) return;
 
-    const newMemo: Memo = {
-      id: `memo-${Date.now()}`,
-      bookId,
-      page: memoPage.trim() || undefined,
-      content: memoContent.trim(),
-      created_at: new Date().toISOString().split('T')[0].replace(/-/g, '.')
-    };
+    setIsMemoSubmitting(true);
+    setMemoSubmitError(prev => ({ ...prev, [bookId]: '' }));
 
-    const updated = [newMemo, ...memos];
-    setMemos(updated);
-    localStorage.setItem('bookclub_personal_memos', JSON.stringify(updated));
+    try {
+      const pageVal = memoPage.trim() ? Number(memoPage.trim()) : undefined;
+      await mockApi.books.addUserBookMemo(bookId, {
+        page: pageVal,
+        content: memoContent.trim()
+      });
 
-    // 리셋
-    setMemoPage('');
-    setMemoContent('');
+      // 등록 성공 후 메모 리스트 재로드
+      await loadMemosForBook(bookId);
+      
+      // 내 책장 리스트의 누적 메모 개수 표시 실시간 동기화를 위해 도서 목록도 리로드
+      if (currentUser) {
+        await loadShelfData(currentUser.id);
+      }
+
+      // 인풋 초기화
+      setMemoPage('');
+      setMemoContent('');
+    } catch (err: any) {
+      console.error('메모 추가 실패:', err);
+      setMemoSubmitError(prev => ({ ...prev, [bookId]: err.message || '메모를 저장하지 못했어요. 잠시 후 다시 시도해주세요.' }));
+    } finally {
+      setIsMemoSubmitting(false);
+    }
+  };
+
+  // 독서 메모 수정
+  const handleUpdateMemo = async (memoId: string, bookId: string) => {
+    if (!editMemoContent.trim()) {
+      alert('메모 내용을 입력해주세요.');
+      return;
+    }
+
+    setIsMemoSubmitting(true);
+    setMemoSubmitError(prev => ({ ...prev, [bookId]: '' }));
+
+    try {
+      const pageVal = editMemoPage.trim() ? Number(editMemoPage.trim()) : undefined;
+      await mockApi.books.updateUserBookMemo(memoId, {
+        page: pageVal,
+        content: editMemoContent.trim()
+      });
+
+      // 메모 리스트 재로드
+      await loadMemosForBook(bookId);
+
+      setEditingMemoId(null);
+      setEditMemoPage('');
+      setEditMemoContent('');
+    } catch (err: any) {
+      console.error('메모 수정 실패:', err);
+      setMemoSubmitError(prev => ({ ...prev, [bookId]: err.message || '메모를 수정하지 못했어요. 잠시 후 다시 시도해주세요.' }));
+    } finally {
+      setIsMemoSubmitting(false);
+    }
+  };
+
+  // 독서 메모 삭제
+  const handleDeleteMemo = async (memoId: string, bookId: string) => {
+    const confirmDelete = window.confirm('이 사색 메모를 삭제할까요?');
+    if (!confirmDelete) return;
+
+    setIsMemoSubmitting(true);
+    setMemoSubmitError(prev => ({ ...prev, [bookId]: '' }));
+
+    try {
+      await mockApi.books.deleteUserBookMemo(memoId, bookId);
+
+      // 메모 리스트 재로드
+      await loadMemosForBook(bookId);
+
+      // 내 책장의 누적 메모 개수 실시간 동기화
+      if (currentUser) {
+        await loadShelfData(currentUser.id);
+      }
+    } catch (err: any) {
+      console.error('메모 삭제 실패:', err);
+      setMemoSubmitError(prev => ({ ...prev, [bookId]: err.message || '메모를 삭제하지 못했어요. 잠시 후 다시 시도해주세요.' }));
+    } finally {
+      setIsMemoSubmitting(false);
+    }
   };
 
   // 카운트 집계
@@ -637,21 +710,36 @@ export default function PersonalBookshelfPage() {
 
       {/* 5. 책 리스트 및 아코디언 메모 */}
       <main className="flex-grow px-4.5 pb-24 flex flex-col gap-4">
-        {filteredBooks.length === 0 ? (
-          <div className="text-center py-16 flex flex-col items-center gap-2 border border-card-border border-dashed rounded-2xl bg-card-bg/25">
+        {isShelfLoading ? (
+          <div className="flex-grow flex flex-col justify-center items-center py-16 bg-background">
+            <div className="flex flex-col items-center gap-3">
+              <div className="w-8 h-8 border-3 border-sage-medium border-t-transparent rounded-full animate-spin" />
+              <span className="text-[10px] font-bold text-sage-dark">책장을 정리하고 있습니다...</span>
+            </div>
+          </div>
+        ) : shelfErrorMsg ? (
+          <div className="text-center py-16 flex flex-col items-center gap-2 border border-red-200 border-dashed rounded-2xl bg-red-50/15 px-4">
+            <span className="text-[10px] text-red-500 font-semibold leading-relaxed">{shelfErrorMsg}</span>
+          </div>
+        ) : filteredBooks.length === 0 ? (
+          <div className="text-center py-16 flex flex-col items-center gap-2 border border-card-border border-dashed rounded-2xl bg-card-bg/25 px-6">
             <Library size={24} className="text-foreground/25 animate-pulse" />
-            <span className="text-[10px] text-foreground/45 font-semibold">이 탭의 책꽂이가 비어 있습니다.</span>
+            <p className="text-[10px] text-foreground/45 font-semibold leading-relaxed">
+              아직 책장에 담긴 책이 없어요.<br />
+              마음이 가는 책을 하나 담아볼까요?
+            </p>
             <button
               onClick={() => setIsAddBookModalOpen(true)}
-              className="text-[9px] text-sage-dark font-black underline mt-1"
+              className="text-[9px] text-sage-dark font-black underline mt-2 bg-sage-light/20 px-3 py-1.5 rounded-lg border border-sage-medium/30 hover:bg-sage-light/35 transition-colors"
             >
-              첫 책 꽂기
+              책 추가하기
             </button>
           </div>
         ) : (
           filteredBooks.map(book => {
             const isExpanded = expandedBookId === book.id;
-            const bookMemos = memos.filter(m => m.bookId === book.id);
+            const bookMemos = bookMemosMap[book.id] || [];
+            const displayMemoCount = book.memo_count !== undefined ? book.memo_count : bookMemos.length;
 
             return (
               <div 
@@ -687,7 +775,7 @@ export default function PersonalBookshelfPage() {
                     </div>
                   )}
 
-                  <div className="flex-1 min-w-0 flex flex-col justify-between h-15 pr-6">
+                  <div className="flex-grow min-w-0 flex flex-col justify-between h-15 pr-6">
                     <div className="min-w-0 relative">
                       <h4 className="text-[11px] font-black text-foreground truncate pr-4">{book.title}</h4>
                       <p className="text-[9.5px] text-foreground/45 font-semibold truncate mt-0.5">{book.author}</p>
@@ -725,11 +813,12 @@ export default function PersonalBookshelfPage() {
                       <span>•</span>
                       <span className="flex items-center gap-0.5">
                         <MessageSquare size={10} />
-                        사색 메모 {bookMemos.length}개
+                        사색 메모 {displayMemoCount}개
                       </span>
                     </div>
                   </div>
                 </div>
+
 
                 {/* 5-B. 조용한 카드 조율 메뉴 (추천하기 / 아코디언 버튼) */}
                 <div className="px-4 pb-3 flex justify-between gap-3 border-t border-card-border/30 pt-3.5 bg-background/25">
@@ -749,7 +838,7 @@ export default function PersonalBookshelfPage() {
 
                   {/* 아코디언 토글 버튼 */}
                   <button
-                    onClick={() => setExpandedBookId(isExpanded ? null : book.id)}
+                    onClick={() => handleToggleAccordion(book.id)}
                     className="px-2 py-1 bg-background hover:bg-foreground/5 border border-card-border/40 rounded-lg text-[9px] font-extrabold text-foreground/50 transition-all flex items-center gap-0.5 cursor-pointer"
                   >
                     <span>메모기록</span>
@@ -762,25 +851,120 @@ export default function PersonalBookshelfPage() {
                   isExpanded ? 'max-h-[500px] border-t border-card-border/45 bg-background/50' : 'max-h-0 pointer-events-none'
                 }`}>
                   <div className="p-4 flex flex-col gap-3.5">
-                    <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">내 사색 문장 일기</span>
+                    <div className="flex justify-between items-center">
+                      <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">내 사색 문장 일기</span>
+                      {isMemoSubmitting && (
+                        <div className="w-2.5 h-2.5 border-2 border-sage-medium border-t-transparent rounded-full animate-spin" />
+                      )}
+                    </div>
                     
-                    {/* 메모 리스트 */}
-                    {bookMemos.length === 0 ? (
-                      <p className="text-[10px] text-center text-foreground/35 py-3 font-semibold">아직 남겨둔 사색이 없습니다.</p>
+                    {/* 메모 불러오는 로딩 상태 표시 */}
+                    {memoLoadings[book.id] ? (
+                      <div className="py-6 flex flex-col justify-center items-center gap-2">
+                        <div className="w-5 h-5 border-2 border-sage-medium border-t-transparent rounded-full animate-spin" />
+                        <span className="text-[8.5px] font-semibold text-sage-dark">사색을 불러오는 중...</span>
+                      </div>
+                    ) : memoErrors[book.id] ? (
+                      <div className="py-4 text-center animate-fade-in">
+                        <span className="text-[9.5px] text-red-500 font-semibold">{memoErrors[book.id]}</span>
+                      </div>
+                    ) : bookMemos.length === 0 ? (
+                      <div className="text-center py-5 flex flex-col items-center gap-1.5 border border-dashed border-card-border/40 rounded-xl bg-card-bg/10 animate-fade-in">
+                        <p className="text-[10px] text-foreground/45 font-semibold leading-relaxed">
+                          아직 남겨둔 사색이 없어요.<br />
+                          마음에 걸린 문장이나 생각을 가볍게 남겨보세요.
+                        </p>
+                      </div>
                     ) : (
-                      <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-1">
+                      <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
                         {bookMemos.map(memo => (
                           <div 
                             key={memo.id} 
-                            className="bg-card-bg border border-card-border/65 rounded-xl p-3 flex flex-col gap-1 text-[10.5px]"
+                            className="bg-card-bg border border-card-border/65 rounded-xl p-3 flex flex-col gap-1 text-[10.5px] relative"
                           >
-                            <div className="flex justify-between items-center text-[8px] font-extrabold text-foreground/35">
-                              <span>{memo.created_at}</span>
-                              {memo.page && <span>p.{memo.page}</span>}
-                            </div>
-                            <p className="text-foreground/75 leading-relaxed font-semibold text-justify">
-                              {memo.content}
-                            </p>
+                            {editingMemoId === memo.id ? (
+                              <div className="flex flex-col gap-2.5">
+                                <div className="flex gap-2">
+                                  <input 
+                                    type="number"
+                                    value={editMemoPage}
+                                    onChange={(e) => setEditMemoPage(e.target.value)}
+                                    className="w-16 px-2 py-1 bg-background border border-card-border rounded-lg text-[9.5px] font-semibold text-foreground focus:outline-none focus:border-sage-medium"
+                                    placeholder="페이지"
+                                    min={1}
+                                    disabled={isMemoSubmitting}
+                                  />
+                                  <input 
+                                    type="text"
+                                    value={editMemoContent}
+                                    onChange={(e) => setEditMemoContent(e.target.value)}
+                                    className="flex-1 px-2.5 py-1 bg-background border border-card-border rounded-lg text-[9.5px] font-semibold text-foreground focus:outline-none focus:border-sage-medium"
+                                    placeholder="가장 마음에 걸린 문장이나 생각..."
+                                    maxLength={100}
+                                    required
+                                    disabled={isMemoSubmitting}
+                                  />
+                                </div>
+                                <div className="flex justify-end gap-2.5 text-[9px] font-bold">
+                                  <button 
+                                    type="button" 
+                                    disabled={isMemoSubmitting}
+                                    onClick={() => {
+                                      setEditingMemoId(null);
+                                      setEditMemoPage('');
+                                      setEditMemoContent('');
+                                    }}
+                                    className="text-foreground/40 hover:text-foreground/75 cursor-pointer disabled:opacity-50"
+                                  >
+                                    취소
+                                  </button>
+                                  <button 
+                                    type="button" 
+                                    disabled={isMemoSubmitting}
+                                    onClick={() => handleUpdateMemo(memo.id, book.id)}
+                                    className="text-sage-dark hover:text-sage-medium cursor-pointer flex items-center gap-1 disabled:opacity-50"
+                                  >
+                                    {isMemoSubmitting && editingMemoId === memo.id && (
+                                      <div className="w-2 h-2 border border-sage-dark border-t-transparent rounded-full animate-spin" />
+                                    )}
+                                    저장
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="flex justify-between items-center text-[8px] font-extrabold text-foreground/35 select-none">
+                                  <span>{memo.created_at}</span>
+                                  <div className="flex items-center gap-2">
+                                    {memo.page && <span>p.{memo.page}</span>}
+                                    <span>•</span>
+                                    <button 
+                                      type="button"
+                                      disabled={isMemoSubmitting}
+                                      onClick={() => {
+                                        setEditingMemoId(memo.id);
+                                        setEditMemoPage(memo.page || '');
+                                        setEditMemoContent(memo.content);
+                                      }}
+                                      className="text-foreground/45 hover:text-sage-dark cursor-pointer font-extrabold transition-colors disabled:opacity-50"
+                                    >
+                                      수정
+                                    </button>
+                                    <button 
+                                      type="button"
+                                      disabled={isMemoSubmitting}
+                                      onClick={() => handleDeleteMemo(memo.id, book.id)}
+                                      className="text-red-500/60 hover:text-red-500 cursor-pointer font-extrabold transition-colors disabled:opacity-50"
+                                    >
+                                      삭제
+                                    </button>
+                                  </div>
+                                </div>
+                                <p className="text-foreground/75 leading-relaxed font-semibold text-justify">
+                                  {memo.content}
+                                </p>
+                              </>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -791,29 +975,41 @@ export default function PersonalBookshelfPage() {
                       onSubmit={(e) => handleAddMemo(e, book.id)}
                       className="flex flex-col gap-2 pt-2 border-t border-card-border/30"
                     >
+                      {memoSubmitError[book.id] && (
+                        <div className="text-[8.5px] text-red-500 font-semibold mb-1">
+                          ⚠️ {memoSubmitError[book.id]}
+                        </div>
+                      )}
                       <div className="flex gap-2">
                         <input 
                           type="number"
                           placeholder="페이지 (선택)"
                           value={memoPage}
                           onChange={(e) => setMemoPage(e.target.value)}
-                          className="w-20 px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium"
+                          className="w-20 px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium disabled:opacity-50"
                           min={1}
+                          disabled={isMemoSubmitting}
                         />
                         <input 
                           type="text"
                           placeholder="가장 마음을 흔들었던 문장이나 짧은 사색..."
                           value={memoContent}
                           onChange={(e) => setMemoContent(e.target.value)}
-                          className="flex-1 px-3 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium placeholder:text-foreground/30"
+                          className="flex-1 px-3 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium placeholder:text-foreground/30 disabled:opacity-50"
                           maxLength={100}
                           required
+                          disabled={isMemoSubmitting}
                         />
                         <button
                           type="submit"
-                          className="w-8 h-8 bg-sage-medium hover:bg-sage-dark text-white rounded-lg flex justify-center items-center shadow-xs cursor-pointer flex-shrink-0"
+                          disabled={isMemoSubmitting}
+                          className="w-8 h-8 bg-sage-medium hover:bg-sage-dark text-white rounded-lg flex justify-center items-center shadow-xs cursor-pointer flex-shrink-0 disabled:opacity-50"
                         >
-                          <Send size={12} />
+                          {isMemoSubmitting ? (
+                            <div className="w-2.5 h-2.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <Send size={12} />
+                          )}
                         </button>
                       </div>
                     </form>
@@ -857,6 +1053,7 @@ export default function PersonalBookshelfPage() {
               </div>
               <button 
                 type="button"
+                disabled={isAddBookLoading}
                 onClick={() => {
                   setIsAddBookModalOpen(false);
                   setSelectedAddBook(null);
@@ -866,12 +1063,20 @@ export default function PersonalBookshelfPage() {
                   setDirectTitle('');
                   setDirectAuthor('');
                   setDirectCoverUrl('');
+                  setAddBookErrorMsg('');
                 }}
-                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer"
+                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer disabled:opacity-50"
               >
                 <X size={12} />
               </button>
             </div>
+
+            {/* 에러 메시지 인라인 노출 */}
+            {addBookErrorMsg && (
+              <div className="bg-red-50/15 border border-red-200/50 rounded-xl p-3 text-[9px] text-red-500 font-semibold leading-relaxed animate-fade-in">
+                ⚠️ {addBookErrorMsg}
+              </div>
+            )}
 
             {/* Step 1: 책 검색 선택 또는 직접 등록 */}
             {!selectedAddBook && !isDirectInput && (
@@ -1093,21 +1298,25 @@ export default function PersonalBookshelfPage() {
             <div className="flex gap-2.5 mt-2">
               <button 
                 type="button"
+                disabled={isAddBookLoading}
                 onClick={() => {
                   setIsAddBookModalOpen(false);
                   setSelectedAddBook(null);
                   setSearchQuery('');
                   setAddBookStatus('reading');
+                  setAddBookErrorMsg('');
                 }}
-                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
+                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 취소
               </button>
               <button 
                 type="submit"
-                className="flex-1 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs cursor-pointer"
+                disabled={isAddBookLoading}
+                className="flex-1 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                내 서재에 등록
+                {isAddBookLoading && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                {isAddBookLoading ? '등록 중...' : '내 서재에 등록'}
               </button>
             </div>
             
@@ -1343,15 +1552,24 @@ export default function PersonalBookshelfPage() {
               </div>
               <button 
                 type="button"
+                disabled={isEditBookLoading}
                 onClick={() => {
                   setIsEditOpen(false);
                   setActiveMenuBook(null);
+                  setEditBookErrorMsg('');
                 }}
-                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer"
+                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer disabled:opacity-50"
               >
                 <X size={12} />
               </button>
             </div>
+
+            {/* 에러 메시지 인라인 노출 */}
+            {editBookErrorMsg && (
+              <div className="bg-red-50/15 border border-red-200/50 rounded-xl p-3 text-[9px] text-red-500 font-semibold leading-relaxed animate-fade-in">
+                ⚠️ {editBookErrorMsg}
+              </div>
+            )}
 
             {/* 정보 입력 필드 */}
             <div className="flex flex-col gap-3 bg-background/30 p-3.5 border border-card-border rounded-2xl">
@@ -1483,19 +1701,23 @@ export default function PersonalBookshelfPage() {
             <div className="flex gap-2.5 mt-2">
               <button 
                 type="button"
+                disabled={isEditBookLoading}
                 onClick={() => {
                   setIsEditOpen(false);
                   setActiveMenuBook(null);
+                  setEditBookErrorMsg('');
                 }}
-                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
+                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 취소
               </button>
               <button 
                 type="submit"
-                className="flex-1 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs cursor-pointer"
+                disabled={isEditBookLoading}
+                className="flex-1 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                저장하기
+                {isEditBookLoading && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                {isEditBookLoading ? '저장 중...' : '저장하기'}
               </button>
             </div>
           </form>
@@ -1651,6 +1873,13 @@ export default function PersonalBookshelfPage() {
               </p>
             </div>
 
+            {/* 에러 메시지 인라인 노출 */}
+            {deleteBookErrorMsg && (
+              <div className="bg-red-50/15 border border-red-200/50 rounded-xl p-3 text-[9px] text-red-500 font-semibold leading-relaxed text-center">
+                ⚠️ {deleteBookErrorMsg}
+              </div>
+            )}
+
             <div className="bg-sage-light/10 border border-card-border/40 rounded-xl p-3 flex gap-2.5 items-center">
               {activeMenuBook.cover_url ? (
                 // eslint-disable-next-line @next/next/no-img-element
@@ -1669,19 +1898,25 @@ export default function PersonalBookshelfPage() {
 
             <div className="flex gap-2">
               <button 
+                type="button"
+                disabled={isDeleteBookLoading}
                 onClick={() => {
                   setIsDeleteOpen(false);
                   setActiveMenuBook(null);
+                  setDeleteBookErrorMsg('');
                 }}
-                className="flex-1 py-2 border border-card-border text-foreground/60 rounded-xl text-[9.5px] font-black hover:bg-foreground/5 cursor-pointer"
+                className="flex-1 py-2 border border-card-border text-foreground/60 rounded-xl text-[9.5px] font-black hover:bg-foreground/5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 취소
               </button>
               <button 
+                type="button"
+                disabled={isDeleteBookLoading}
                 onClick={handleDeleteBook}
-                className="flex-1 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-[9.5px] font-black shadow-xs cursor-pointer"
+                className="flex-1 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl text-[9.5px] font-black shadow-xs cursor-pointer flex items-center justify-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                삭제하기
+                {isDeleteBookLoading && <div className="w-2.5 h-2.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                {isDeleteBookLoading ? '삭제 중...' : '삭제하기'}
               </button>
             </div>
           </div>

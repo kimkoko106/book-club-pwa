@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi } from '../../../lib/supabase';
+import { mockApi, isMockMode, supabase } from '../../../lib/supabase';
 import { BookClub, Book, UserBookProgress } from '../../../types';
 import { 
   ArrowLeft, 
@@ -63,6 +63,7 @@ export default function ClubSettingsPage() {
   const [isBookModalOpen, setIsBookModalOpen] = useState(false);
   const [isClubInfoModalOpen, setIsClubInfoModalOpen] = useState(false);
   const [isFlowModalOpen, setIsFlowModalOpen] = useState(false);
+  const [isActionLoading, setIsActionLoading] = useState(false);
 
   // 책 검색 상태
   const [searchQuery, setSearchQuery] = useState('');
@@ -87,6 +88,8 @@ export default function ClubSettingsPage() {
   const [tStartDate, setTStartDate] = useState('2026-05-26');
   const [tEndDate, setTEndDate] = useState('2026-05-31');
   const [validationError, setValidationError] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
 
   // 1. 초기 데이터 로드
   useEffect(() => {
@@ -105,6 +108,39 @@ export default function ClubSettingsPage() {
           setActiveClub(club);
           setClubTitleInput(club.title);
           setClubDescInput(club.description || '');
+
+          // monthly_books 정보 조회 및 로컬 백업
+          const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
+          if (monthlyBook) {
+            let uiStage = 'reading';
+            if (monthlyBook.stage === 'question') uiStage = 'question_collecting';
+            else if (monthlyBook.stage === 'discussion') uiStage = 'discussion';
+            else if (monthlyBook.stage === 'recap') uiStage = 'archiving';
+            setStage(uiStage as any);
+
+            if (monthlyBook.timeline_reading) {
+              const parts = monthlyBook.timeline_reading.split('~');
+              if (parts.length === 2) {
+                localStorage.setItem(`bookclub_start_date_${club.id}`, parts[0]);
+                localStorage.setItem(`bookclub_end_date_${club.id}`, parts[1]);
+              }
+            }
+            if (monthlyBook.timeline_question) {
+              const parts = monthlyBook.timeline_question.split('~');
+              if (parts.length === 2) {
+                localStorage.setItem(`bookclub_q_start_date_${club.id}`, parts[0]);
+                localStorage.setItem(`bookclub_q_end_date_${club.id}`, parts[1]);
+              }
+            }
+            if (monthlyBook.timeline_discussion) {
+              const parts = monthlyBook.timeline_discussion.split('~');
+              if (parts.length === 2) {
+                localStorage.setItem(`bookclub_t_start_date_${club.id}`, parts[0]);
+                localStorage.setItem(`bookclub_t_end_date_${club.id}`, parts[1]);
+              }
+            }
+            localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, uiStage);
+          }
 
           // 로컬스토리지에 저장된 독서 흐름 설정 로드
           const localStart = localStorage.getItem(`bookclub_start_date_${club.id}`);
@@ -312,94 +348,200 @@ export default function ClubSettingsPage() {
   const calculatedTimeline = getTimelineDates();
 
   // 2. 공유책 변경 기능
-  const handleSelectBook = (selectedBook: typeof DUMMY_SEARCH_BOOKS[0]) => {
+  const handleSelectBook = async (selectedBook: typeof DUMMY_SEARCH_BOOKS[0]) => {
     if (!activeClub || !activeBook) return;
 
+    setIsActionLoading(true);
+
     try {
-      const KEY_BOOKS = 'bookclub_mock_books';
-      const storedBooks = localStorage.getItem(KEY_BOOKS);
-      const booksList: Book[] = storedBooks ? JSON.parse(storedBooks) : [];
+      if (!isMockMode && supabase) {
+        // 1. books 테이블에서 중복 확인
+        const { data: existing, error: searchError } = await supabase
+          .from('books')
+          .select('id')
+          .eq('title', selectedBook.title.trim())
+          .eq('author', selectedBook.author.trim())
+          .maybeSingle();
 
-      const updatedBooks = booksList.map(b => {
-        if (b.club_id === activeClub.id) {
-          return {
-            ...b,
-            title: selectedBook.title,
-            author: selectedBook.author,
-            total_pages: selectedBook.total_pages,
-            cover_url: selectedBook.cover_url,
-            created_at: new Date().toISOString()
-          };
+        if (searchError) throw searchError;
+
+        let targetBookId = '';
+        if (existing) {
+          targetBookId = existing.id;
+        } else {
+          // 2. books 테이블에 신규 등록
+          const { data: newBook, error: insertError } = await supabase
+            .from('books')
+            .insert({
+              title: selectedBook.title.trim(),
+              author: selectedBook.author.trim(),
+              total_pages: selectedBook.total_pages,
+              cover_url: selectedBook.cover_url
+            })
+            .select('id')
+            .single();
+
+          if (insertError) throw insertError;
+          targetBookId = newBook.id;
         }
-        return b;
-      });
 
-      localStorage.setItem(KEY_BOOKS, JSON.stringify(updatedBooks));
-      
-      const matchedBook = updatedBooks.find(b => b.club_id === activeClub.id);
-      if (matchedBook) {
-        setActiveBook(matchedBook);
-        const KEY_PROGRESS = 'bookclub_mock_progress';
-        const storedProg = localStorage.getItem(KEY_PROGRESS);
-        const progList = storedProg ? JSON.parse(storedProg) : [];
-        const resetProgress = progList.map((p: any) => {
-          if (p.book_id === activeBook.id) {
-            return {
-              ...p,
-              current_page: 0,
-              status: 'reading',
-              updated_at: new Date().toISOString()
-            };
-          }
-          return p;
+        // 3. monthly_books.book_id 업데이트
+        await mockApi.clubs.updateMonthlyBook(activeClub.id, {
+          book_id: targetBookId
         });
-        localStorage.setItem(KEY_PROGRESS, JSON.stringify(resetProgress));
-        
+
+        // 4. 모임원들 진행도 리셋 (새 도서의 user_books 레코드를 0p / reading으로 셋팅)
+        const { data: membersList, error: memError } = await supabase
+          .from('group_members')
+          .select('user_id')
+          .eq('group_id', activeClub.id);
+
+        if (memError) throw memError;
+
+        const uids = (membersList || []).map(m => m.user_id);
+        for (const uid of uids) {
+          // 신규 책에 대한 user_books 존재 확인
+          const { data: ub, error: ubError } = await supabase
+            .from('user_books')
+            .select('id')
+            .eq('user_id', uid)
+            .eq('book_id', targetBookId)
+            .maybeSingle();
+
+          if (ubError) throw ubError;
+
+          if (ub) {
+            // 존재하면 0p로 초기화
+            const { error: updError } = await supabase
+              .from('user_books')
+              .update({
+                current_page: 0,
+                status: 'reading',
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', ub.id);
+
+            if (updError) throw updError;
+          } else {
+            // 없으면 0p로 인서트
+            const { error: insError } = await supabase
+              .from('user_books')
+              .insert({
+                user_id: uid,
+                book_id: targetBookId,
+                current_page: 0,
+                status: 'reading'
+              });
+
+            if (insError) throw insError;
+          }
+        }
+
+        // 5. 프론트엔드 UI 상태 반영
+        const newBookObj: Book = {
+          id: targetBookId,
+          club_id: activeClub.id,
+          title: selectedBook.title,
+          author: selectedBook.author,
+          total_pages: selectedBook.total_pages,
+          cover_url: selectedBook.cover_url,
+          created_at: new Date().toISOString()
+        };
+
+        setActiveBook(newBookObj);
         setMembers(prev => prev.map(m => ({
           ...m,
+          book_id: targetBookId,
           current_page: 0,
           status: 'reading'
         })));
+
+      } else {
+        // 로컬 Mock 모드 기존 동작 유지
+        const KEY_BOOKS = 'bookclub_mock_books';
+        const storedBooks = localStorage.getItem(KEY_BOOKS);
+        const booksList: Book[] = storedBooks ? JSON.parse(storedBooks) : [];
+
+        const updatedBooks = booksList.map(b => {
+          if (b.club_id === activeClub.id) {
+            return {
+              ...b,
+              title: selectedBook.title,
+              author: selectedBook.author,
+              total_pages: selectedBook.total_pages,
+              cover_url: selectedBook.cover_url,
+              created_at: new Date().toISOString()
+            };
+          }
+          return b;
+        });
+
+        localStorage.setItem(KEY_BOOKS, JSON.stringify(updatedBooks));
+        
+        const matchedBook = updatedBooks.find(b => b.club_id === activeClub.id);
+        if (matchedBook) {
+          setActiveBook(matchedBook);
+          const KEY_PROGRESS = 'bookclub_mock_progress';
+          const storedProg = localStorage.getItem(KEY_PROGRESS);
+          const progList = storedProg ? JSON.parse(storedProg) : [];
+          const resetProgress = progList.map((p: any) => {
+            if (p.book_id === activeBook.id) {
+              return {
+                ...p,
+                current_page: 0,
+                status: 'reading',
+                updated_at: new Date().toISOString()
+              };
+            }
+            return p;
+          });
+          localStorage.setItem(KEY_PROGRESS, JSON.stringify(resetProgress));
+          
+          setMembers(prev => prev.map(m => ({
+            ...m,
+            current_page: 0,
+            status: 'reading'
+          })));
+        }
       }
 
       setIsBookModalOpen(false);
       alert(`공유 도서가 [${selectedBook.title}]로 변경되었으며, 진척도가 리셋되었습니다.`);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('공유 도서 변경에 실패했습니다.');
+      alert(`공유 도서 변경에 실패했습니다.\n\n[상세 에러]\n${err.message || err}`);
+    } finally {
+      setIsActionLoading(false);
     }
   };
 
   // 3. 질문 선정/보류 토글
-  const handleToggleQuestionStatus = (questionId: string) => {
+  const [actionError, setActionError] = useState('');
+  const handleToggleQuestionStatus = async (questionId: string) => {
+    const targetQ = questions.find(q => q.id === questionId);
+    if (!targetQ) return;
+
+    const nextStatus = targetQ.status === 'selected' ? 'suggested' : 'selected';
+    setIsActionLoading(true);
+    setActionError('');
+
     try {
-      const KEY_DISCUSSIONS = 'bookclub_mock_discussions';
-      const storedQuestions = localStorage.getItem(KEY_DISCUSSIONS);
-      const questionsList = storedQuestions ? JSON.parse(storedQuestions) : [];
-
-      const updated = questionsList.map((q: any) => {
-        if (q.id === questionId) {
-          return {
-            ...q,
-            status: q.status === 'selected' ? 'suggested' : 'selected'
-          };
-        }
-        return q;
-      });
-
-      localStorage.setItem(KEY_DISCUSSIONS, JSON.stringify(updated));
+      await mockApi.discussion.updateQuestionStatus(questionId, nextStatus);
 
       setQuestions(prev => prev.map(q => {
         if (q.id === questionId) {
           return {
             ...q,
-            status: q.status === 'selected' ? 'suggested' : 'selected'
+            status: nextStatus
           };
         }
         return q;
       }));
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setActionError('질문 선정 상태를 변경하지 못했어요.');
+    } finally {
+      setIsActionLoading(false);
     }
   };
 
@@ -472,8 +614,8 @@ export default function ClubSettingsPage() {
     alert(`초대 코드 [ ${activeClub.invite_code} ] 가 복사되었습니다.`);
   };
 
-  // 독서 흐름 설정 최종 저장 (로컬스토리지 반영)
-  const handleSaveFlowSettings = (e: React.FormEvent) => {
+  // 독서 흐름 설정 최종 저장 (로컬스토리지 및 Supabase DB 반영)
+  const handleSaveFlowSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeClub) return;
 
@@ -481,7 +623,29 @@ export default function ClubSettingsPage() {
       return;
     }
 
+    setSaveError('');
+    setIsSaving(true);
+
     try {
+      // DB stage mapping
+      let dbStage: 'reading' | 'question' | 'discussion' | 'recap' = 'reading';
+      if (stage === 'question_collecting') dbStage = 'question';
+      else if (stage === 'discussion') dbStage = 'discussion';
+      else if (stage === 'archiving') dbStage = 'recap';
+
+      // timeline range assembly
+      const timelineReading = `${startDate}~${endDate}`;
+      const timelineQuestion = qStartDate && qEndDate ? `${qStartDate}~${qEndDate}` : null;
+      const timelineDiscussion = tStartDate && tEndDate ? `${tStartDate}~${tEndDate}` : null;
+
+      // API Call
+      await mockApi.clubs.updateMonthlyBook(activeClub.id, {
+        stage: dbStage,
+        timeline_reading: timelineReading,
+        timeline_question: timelineQuestion,
+        timeline_discussion: timelineDiscussion
+      });
+
       localStorage.setItem(`bookclub_start_date_${activeClub.id}`, startDate);
       localStorage.setItem(`bookclub_end_date_${activeClub.id}`, endDate);
       localStorage.setItem(`bookclub_q_days_${activeClub.id}`, String(qDays));
@@ -498,7 +662,9 @@ export default function ClubSettingsPage() {
       alert('독서 흐름 설정이 저장되었습니다.');
     } catch (err) {
       console.error(err);
-      alert('설정 저장에 실패했습니다.');
+      setSaveError('독서 흐름을 저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -685,6 +851,14 @@ export default function ClubSettingsPage() {
             </div>
           </div>
 
+          {/* 액션 에러 메시지 표시 */}
+          {actionError && (
+            <div className="bg-red-500/5 border border-red-500/20 text-red-500/85 text-[9px] font-extrabold px-3 py-2 rounded-xl flex items-center gap-1.5 animate-fade-in">
+              <AlertCircle size={12} className="flex-shrink-0" />
+              <span>{actionError}</span>
+            </div>
+          )}
+
           {/* 2-A. 선정 질문 요약 (제거 액션 바인딩) */}
           {selectedQuestions.length > 0 ? (
             <div className="bg-sage-light/10 border border-sage-light/45 rounded-xl p-3 flex flex-col gap-1.5">
@@ -698,7 +872,8 @@ export default function ClubSettingsPage() {
                     </div>
                     <button 
                       onClick={() => handleToggleQuestionStatus(q.id)}
-                      className="flex-shrink-0 text-[8px] text-red-500/70 hover:text-red-500 hover:bg-red-50 font-black px-1.5 py-0.5 border border-red-200/40 rounded transition-all cursor-pointer"
+                      disabled={isActionLoading}
+                      className="flex-shrink-0 text-[8px] text-red-500/70 hover:text-red-500 hover:bg-red-50 font-black px-1.5 py-0.5 border border-red-200/40 rounded transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       제거
                     </button>
@@ -775,7 +950,8 @@ export default function ClubSettingsPage() {
                       
                       <button 
                         onClick={() => handleToggleQuestionStatus(q.id)}
-                        className={`flex-shrink-0 px-2.5 py-1.5 rounded-lg text-[9px] font-black transition-all flex items-center gap-0.5 cursor-pointer active:scale-95 ${
+                        disabled={isActionLoading}
+                        className={`flex-shrink-0 px-2.5 py-1.5 rounded-lg text-[9px] font-black transition-all flex items-center gap-0.5 cursor-pointer active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed ${
                           isSelected 
                             ? 'bg-warm-beige text-white hover:bg-warm-beige/95 shadow-xs' 
                             : 'bg-foreground/5 text-foreground/60 hover:bg-foreground/10'
@@ -1090,25 +1266,34 @@ export default function ClubSettingsPage() {
               </div>
             )}
 
+            {/* 저장 API 에러 메시지 표시 */}
+            {saveError && (
+              <div className="bg-red-500/5 border border-red-500/20 text-red-500/85 text-[9px] font-extrabold px-3 py-2 rounded-xl flex items-center gap-1.5 animate-fade-in">
+                <AlertCircle size={12} className="flex-shrink-0" />
+                <span>{saveError}</span>
+              </div>
+            )}
+
             {/* 저장 버튼 그룹 */}
             <div className="flex gap-2.5 mt-1">
               <button 
                 type="button"
+                disabled={isSaving}
                 onClick={() => setIsFlowModalOpen(false)}
-                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
+                className="flex-1 py-2.5 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 취소
               </button>
               <button 
                 type="submit"
-                disabled={!!validationError}
+                disabled={!!validationError || isSaving}
                 className={`flex-1 py-2.5 rounded-xl text-[10px] font-black shadow-sm transition-all ${
-                  validationError
+                  (validationError || isSaving)
                     ? 'bg-foreground/10 text-foreground/35 cursor-not-allowed border border-card-border/40'
                     : 'bg-sage-medium hover:bg-sage-dark text-white cursor-pointer'
                 }`}
               >
-                설정 저장
+                {isSaving ? '저장 중...' : '설정 저장'}
               </button>
             </div>
 
@@ -1131,11 +1316,13 @@ export default function ClubSettingsPage() {
               </div>
               <button 
                 onClick={() => {
+                  if (isActionLoading) return;
                   setIsBookModalOpen(false);
                   setSearchQuery('');
                   setSearchResults(DUMMY_SEARCH_BOOKS);
                 }}
-                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer"
+                disabled={isActionLoading}
+                className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <X size={12} />
               </button>
@@ -1166,8 +1353,14 @@ export default function ClubSettingsPage() {
                 searchResults.map((bookItem, idx) => (
                   <div 
                     key={idx} 
-                    onClick={() => handleSelectBook(bookItem)}
-                    className="bg-background border border-card-border/70 hover:border-sage-medium rounded-xl p-2.5 flex gap-3.5 items-center cursor-pointer transition-all duration-200 hover:-translate-y-0.5 group"
+                    onClick={() => {
+                      if (!isActionLoading) handleSelectBook(bookItem);
+                    }}
+                    className={`bg-background border border-card-border/70 rounded-xl p-2.5 flex gap-3.5 items-center transition-all duration-200 group ${
+                      isActionLoading 
+                        ? 'opacity-55 cursor-not-allowed' 
+                        : 'hover:border-sage-medium hover:-translate-y-0.5 cursor-pointer'
+                    }`}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img 

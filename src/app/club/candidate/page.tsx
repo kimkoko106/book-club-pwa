@@ -108,6 +108,7 @@ export default function NextBookCandidatePage() {
   const [userRole, setUserRole] = useState<'admin' | 'member'>('admin');
   const [filterType, setFilterType] = useState<'all' | 'read' | 'wish'>('all');
   const [isRecommendModalOpen, setIsRecommendModalOpen] = useState(false);
+  const [activeClubId, setActiveClubId] = useState('club-1');
 
   // 모달 입력 상태
   const [searchQuery, setSearchQuery] = useState('');
@@ -127,6 +128,11 @@ export default function NextBookCandidatePage() {
         }
         setCurrentUser(data.user);
 
+        // 가입된 모임 기준 activeClubId 동적 조회
+        const myClubs = await mockApi.clubs.getMyClubs(data.user.id);
+        const clubId = myClubs.length > 0 ? myClubs[0].id : 'club-1';
+        setActiveClubId(clubId);
+
         // 후보책 로컬스토리지 로드
         const stored = localStorage.getItem('bookclub_next_book_candidates');
         if (stored) {
@@ -136,7 +142,7 @@ export default function NextBookCandidatePage() {
           setCandidates(INITIAL_CANDIDATES);
         }
       } catch (err) {
-        console.error('초기 데이터 로드 중 에러:', err);
+        console.warn('초기 데이터 로드 중 에러:', err);
       }
     }
     init();
@@ -211,63 +217,24 @@ export default function NextBookCandidatePage() {
     localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(updated));
   };
 
-  // 5. 방장 흐름: 다음 공유책으로 선택
-  const handleSelectAsNextBook = (cand: CandidateBook) => {
+  // 5. 방장 흐름: 다음 공유책으로 선택 (Supabase / 로컬 Mock API 누적 생성으로 실연동)
+  const handleSelectAsNextBook = async (cand: CandidateBook) => {
     const confirmChoice = confirm(`[${cand.title}] 도서를 이번 달 독서모임 공유도서로 선정하시겠습니까?\n진행도가 0페이지로 초기화됩니다.`);
     if (!confirmChoice) return;
 
     try {
-      // 1. mock_books 업데이트
-      const KEY_BOOKS = 'bookclub_mock_books';
-      const storedBooks = localStorage.getItem(KEY_BOOKS);
-      const booksList: Book[] = storedBooks ? JSON.parse(storedBooks) : [];
-
-      const clubId = 'club-1'; // 기본 클럽 ID
-      
-      const updatedBooks = booksList.map(b => {
-        if (b.club_id === clubId) {
-          return {
-            ...b,
-            title: cand.title,
-            author: cand.author,
-            total_pages: cand.total_pages,
-            cover_url: cand.cover_url,
-            created_at: new Date().toISOString()
-          };
-        }
-        return b;
+      await mockApi.clubs.selectNextBook(activeClubId, {
+        title: cand.title,
+        author: cand.author,
+        cover_url: cand.cover_url,
+        total_pages: cand.total_pages
       });
-      localStorage.setItem(KEY_BOOKS, JSON.stringify(updatedBooks));
-
-      // 2. 모임원 진척도 리셋
-      const KEY_PROGRESS = 'bookclub_mock_progress';
-      const storedProg = localStorage.getItem(KEY_PROGRESS);
-      const progList = storedProg ? JSON.parse(storedProg) : [];
-      const matchedBook = updatedBooks.find(b => b.club_id === clubId);
-
-      if (matchedBook) {
-        const resetProgress = progList.map((p: any) => {
-          if (p.book_id === matchedBook.id) {
-            return {
-              ...p,
-              current_page: 0,
-              status: 'reading',
-              updated_at: new Date().toISOString()
-            };
-          }
-          return p;
-        });
-        localStorage.setItem(KEY_PROGRESS, JSON.stringify(resetProgress));
-      }
-
-      // 3. 독서 흐름 단계를 1단계(독서 중)로 변경
-      localStorage.setItem(`bookclub_mock_club_stage_${clubId}`, 'reading');
 
       alert(`축하합니다! 이번 달 공유 도서가 [${cand.title}]로 공식 선정되었으며, 독서 단계가 1단계(몰입)로 리셋되었습니다.`);
       router.push('/club');
     } catch (err) {
-      console.error(err);
-      alert('도서 선정 처리에 실패했습니다.');
+      console.warn('[Candidate] 도서 선정 에러:', err);
+      alert('도서 선정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.');
     }
   };
 

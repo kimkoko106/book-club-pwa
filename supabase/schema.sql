@@ -22,6 +22,34 @@ create policy "Users can update their own profile." on public.profiles
   for update using (auth.uid() = id);
 
 
+-- 신규 회원가입 시 public.profiles 테이블에 자동 row 생성을 위한 트리거 함수
+create or replace function public.handle_new_user()
+returns trigger
+security definer
+language plpgsql
+as $$
+begin
+  insert into public.profiles (id, username, avatar_url, updated_at)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'username', new.raw_user_meta_data->>'nickname', 'user_' || substr(new.id::text, 1, 8)),
+    coalesce(new.raw_user_meta_data->>'avatar_url', ''),
+    now()
+  )
+  on conflict (id) do update set
+    username = excluded.username,
+    avatar_url = excluded.avatar_url,
+    updated_at = excluded.updated_at;
+  return new;
+end;
+$$;
+
+-- auth.users에 insert가 일어난 후 실행되는 트리거 바인딩
+create or replace trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+
 -- 2. Groups (독서 공간 - 1인 독서방 및 독서 모임 공통 지원)
 create table if not exists public.groups (
   id uuid default gen_random_uuid() primary key,
@@ -74,8 +102,12 @@ create policy "Users can view public groups, groups they are member of, or they 
   for select using (
     visibility = 'public' or
     created_by = auth.uid() or
-    public.is_group_member(id, auth.uid())
+    public.is_group_member(id, auth.uid()) or
+    invite_code is not null -- 초대 코드가 부여된 그룹은 가입 조회를 위해 허용
   );
+
+create policy "Authenticated users can create groups." on public.groups
+  for insert with check (auth.uid() = created_by);
 
 create policy "Group creators or admins can update groups." on public.groups
   for update using (
@@ -270,6 +302,45 @@ create policy "Group members can update reactions, or admins can manage status/s
   );
 
 
+-- 8-1. Question Reactions (질문 반응 - 중복 방지 및 토글용)
+create table if not exists public.question_reactions (
+  id uuid default gen_random_uuid() primary key,
+  question_id uuid references public.questions(id) on delete cascade not null,
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  reaction_type varchar(20) not null, -- 'curious' (궁금해요), 'talk' (이야기하고 싶어요)
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  unique(question_id, user_id, reaction_type)
+);
+
+alter table public.question_reactions enable row level security;
+
+create policy "Group members can view question reactions." on public.question_reactions
+  for select using (
+    exists (
+      select 1 
+      from public.questions q 
+      where q.id = question_id 
+        and public.is_group_member(q.group_id, auth.uid())
+    )
+  );
+
+create policy "Group members can insert their own reaction." on public.question_reactions
+  for insert with check (
+    auth.uid() = user_id and
+    exists (
+      select 1 
+      from public.questions q 
+      where q.id = question_id 
+        and public.is_group_member(q.group_id, auth.uid())
+    )
+  );
+
+create policy "Users can delete their own reaction." on public.question_reactions
+  for delete using (
+    auth.uid() = user_id
+  );
+
+
 -- 9. Question Feedback (질문 다듬기 피드백 메모 - 사색 확장 전용)
 create table if not exists public.question_feedback (
   id uuid default gen_random_uuid() primary key,
@@ -300,6 +371,16 @@ create policy "Group members can write feedback." on public.question_feedback
       where q.id = question_id 
         and public.is_group_member(q.group_id, auth.uid())
     )
+  );
+
+create policy "Users can update their own feedback." on public.question_feedback
+  for update using (
+    auth.uid() = user_id
+  );
+
+create policy "Users can delete their own feedback." on public.question_feedback
+  for delete using (
+    auth.uid() = user_id
   );
 
 
@@ -333,6 +414,16 @@ create policy "Group members can post comments." on public.discussion_comments
       where q.id = question_id 
         and public.is_group_member(q.group_id, auth.uid())
     )
+  );
+
+create policy "Users can update their own comments." on public.discussion_comments
+  for update using (
+    auth.uid() = user_id
+  );
+
+create policy "Users can delete their own comments." on public.discussion_comments
+  for delete using (
+    auth.uid() = user_id
   );
 
 

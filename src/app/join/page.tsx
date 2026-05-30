@@ -15,8 +15,7 @@ export default function JoinClubPage() {
   useEffect(() => {
     mockApi.auth.getUser().then(({ data }) => {
       if (!data?.user) {
-        alert('로그인이 필요한 페이지입니다.');
-        window.location.href = '/login';
+        router.replace('/login');
       } else {
         setCurrentUser(data.user);
       }
