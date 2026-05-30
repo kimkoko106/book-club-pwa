@@ -12,9 +12,16 @@ export default function CreateClubPage() {
   const [description, setDescription] = useState('');
   const [bookTitle, setBookTitle] = useState('');
   const [bookAuthor, setBookAuthor] = useState('');
-  const [totalPages, setTotalPages] = useState<number>(300);
+  const [totalPages, setTotalPages] = useState<number | ''>('');
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
+
+  // 네이버 검색 및 디바운스용 상태
+  const [selectedBookMetadata, setSelectedBookMetadata] = useState<any>(null);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [showDropdown, setShowDropdown] = useState(false);
 
   useEffect(() => {
     mockApi.auth.getUser().then(({ data }) => {
@@ -26,26 +33,65 @@ export default function CreateClubPage() {
     });
   }, []);
 
+  // 외부 클릭 시 검색 드롭다운 닫기
+  useEffect(() => {
+    const handleOutsideClick = () => setShowDropdown(false);
+    document.addEventListener('click', handleOutsideClick);
+    return () => document.removeEventListener('click', handleOutsideClick);
+  }, []);
+
+  // 400ms 디바운스 검색 API 연동
+  useEffect(() => {
+    if (!bookTitle.trim()) {
+      setSearchResults([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    if (selectedBookMetadata && bookTitle.trim() === selectedBookMetadata.title) {
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchLoading(true);
+      setSearchError(null);
+      try {
+        const res = await fetch(`/api/books/search?query=${encodeURIComponent(bookTitle)}`);
+        if (!res.ok) throw new Error('API 오류');
+        const data = await res.json();
+        setSearchResults(data.items || []);
+        setShowDropdown(true);
+      } catch (err) {
+        console.warn('책 검색 실패:', err);
+        setSearchError('책 검색을 불러오지 못했어요...');
+      } finally {
+        setIsSearchLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [bookTitle, selectedBookMetadata]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    if (!clubTitle.trim() || !bookTitle.trim() || !bookAuthor.trim() || totalPages <= 0) {
+    if (!clubTitle.trim() || !bookTitle.trim() || !bookAuthor.trim()) {
       alert('필수 입력란을 올바르게 채워주세요.');
       return;
     }
 
     setIsLoading(true);
     try {
-      console.log('독서 모임 개설 시도 (정적 Mock):', { clubTitle, description, bookTitle, bookAuthor, totalPages });
+      console.log('독서 모임 개설 시도 (Supabase 연동):', { clubTitle, description, bookTitle, bookAuthor, totalPages });
       
-      // Mock API를 통해 모임 생성
       const newClub = await mockApi.clubs.createClub(
         currentUser.id,
         clubTitle.trim(),
         description.trim(),
         bookTitle.trim(),
         bookAuthor.trim(),
-        totalPages
+        totalPages === '' ? null : Number(totalPages),
+        selectedBookMetadata
       );
       
       alert(`모임 [${newClub.title}]이 개설되었습니다!\n초대 코드: ${newClub.invite_code}`);
@@ -111,16 +157,86 @@ export default function CreateClubPage() {
 
             <div className="flex flex-col gap-1">
               <label className="text-[11px] font-bold text-foreground/60">도서명 *</label>
-              <div className="relative">
+              <div className="relative" onClick={(e) => e.stopPropagation()}>
                 <input
                   type="text"
                   value={bookTitle}
-                  onChange={(e) => setBookTitle(e.target.value)}
+                  onChange={(e) => {
+                    setBookTitle(e.target.value);
+                    setShowDropdown(true);
+                  }}
+                  onFocus={() => setShowDropdown(true)}
                   placeholder="정확한 책 제목을 입력하세요."
                   className="w-full pl-10 pr-4 py-2.5 bg-background border border-card-border rounded-xl text-sm focus:outline-none focus:border-sage-medium font-semibold placeholder:text-foreground/30"
                   required
                 />
                 <BookOpen size={16} className="absolute left-3.5 top-3.5 text-foreground/30" />
+
+                {/* 실시간 알라딘 검색 결과 자동완성 드롭다운 */}
+                {showDropdown && (searchResults.length > 0 || isSearchLoading || searchError) && (
+                  <div className="absolute left-0 right-0 top-full mt-1.5 bg-card-bg border border-card-border rounded-xl shadow-lg z-[100] max-h-64 overflow-y-auto p-2 flex flex-col gap-1.5">
+                    {isSearchLoading ? (
+                      <div className="py-4 flex justify-center items-center gap-2">
+                        <div className="w-4 h-4 border-2 border-sage-medium border-t-transparent rounded-full animate-spin" />
+                        <span className="text-[10px] text-sage-dark font-semibold">책 검색 중...</span>
+                      </div>
+                    ) : searchError ? (
+                      <div className="py-2.5 px-3 text-[10px] text-red-500 font-semibold text-center">
+                        ⚠️ {searchError}
+                      </div>
+                    ) : searchResults.length === 0 ? (
+                      <div className="py-2.5 px-3 text-[10px] text-foreground/45 font-semibold text-center">
+                        검색 결과가 없어요.
+                      </div>
+                    ) : (
+                      searchResults.map((item, idx) => (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            setBookTitle(item.title);
+                            setBookAuthor(item.author);
+                            setSelectedBookMetadata(item);
+                            setShowDropdown(false);
+                          }}
+                          className="flex items-start gap-2.5 p-1.5 hover:bg-foreground/5 rounded-lg cursor-pointer transition-all duration-150"
+                        >
+                          {item.coverUrl || item.cover_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={item.coverUrl || item.cover_url} alt="cover" className="w-7 h-10 object-cover rounded border border-card-border flex-shrink-0 mt-0.5" />
+                          ) : (
+                            <div className="w-7 h-10 rounded bg-sage-light/20 flex-shrink-0 mt-0.5" />
+                          )}
+                          <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                            <span className="text-[10.5px] font-black text-foreground truncate">{item.title}</span>
+                            <div className="flex flex-wrap items-center gap-x-1 text-[8px] text-foreground/50 font-medium">
+                              <span className="truncate max-w-[80px]">{item.author}</span>
+                              <span className="text-foreground/20">|</span>
+                              <span className="truncate max-w-[80px]">{item.publisher}</span>
+                              {item.published_at && (
+                                <>
+                                  <span className="text-foreground/20">|</span>
+                                  <span>{item.published_at}</span>
+                                </>
+                              )}
+                            </div>
+                            {item.categoryName && (
+                              <span className="text-[7.5px] text-sage-dark/70 font-semibold truncate leading-none">{item.categoryName}</span>
+                            )}
+                            <div className="flex items-center gap-1 text-[7.5px]">
+                              {item.priceStandard && (
+                                <span className="text-foreground/40 line-through">정가 {item.priceStandard.toLocaleString()}원</span>
+                              )}
+                              {item.priceSales && (
+                                <span className="font-bold text-sage-medium">판매가 {item.priceSales.toLocaleString()}원</span>
+                              )}
+                              <span className="text-foreground/30 font-mono">ISBN: {item.isbn13 || item.isbn || '-'}</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -141,15 +257,15 @@ export default function CreateClubPage() {
               </div>
 
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-bold text-foreground/60">전체 페이지 수 *</label>
+                <label className="text-[11px] font-bold text-foreground/60">전체 페이지 수 (선택)</label>
                 <div className="relative">
                   <input
                     type="number"
                     min="1"
                     value={totalPages}
-                    onChange={(e) => setTotalPages(Number(e.target.value))}
+                    onChange={(e) => setTotalPages(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="예: 300"
                     className="w-full pl-9 pr-4 py-2.5 bg-background border border-card-border rounded-xl text-sm focus:outline-none focus:border-sage-medium font-semibold"
-                    required
                   />
                   <HelpCircle size={14} className="absolute left-3.5 top-3.5 text-foreground/30" />
                 </div>

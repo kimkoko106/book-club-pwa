@@ -6,7 +6,7 @@ import { UserBookProgress } from '../types';
 
 interface MemberListProps {
   memberProgresses: UserBookProgress[];
-  totalPages: number;
+  totalPages?: number | null;
 }
 
 export default function MemberList({ memberProgresses, totalPages }: MemberListProps) {
@@ -78,7 +78,11 @@ export default function MemberList({ memberProgresses, totalPages }: MemberListP
         <div className="flex flex-col gap-5">
           <div className="flex flex-col gap-5">
             {memberProgresses.map((mp) => {
-              const percent = Math.min(100, Math.round((mp.current_page / totalPages) * 100));
+              const hasTotalPages = totalPages !== undefined && totalPages !== null && totalPages > 1;
+              const percent = Math.min(100, hasTotalPages
+                ? Math.round((mp.current_page / (totalPages as number)) * 100)
+                : mp.current_page
+              );
               const avatarUrl = mp.profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${mp.user_id}`;
               const username = mp.profile?.username || '알 수 없는 독서가';
 
@@ -101,7 +105,9 @@ export default function MemberList({ memberProgresses, totalPages }: MemberListP
 
                     {/* 배지 및 페이지 수 */}
                     <div className="flex items-center gap-2">
-                      <span className="text-xs text-foreground/60 font-semibold">{mp.current_page}p ({percent}%)</span>
+                      <span className="text-xs text-foreground/60 font-semibold font-mono">
+                        {hasTotalPages ? `${mp.current_page}p (${percent}%)` : `${percent}%`}
+                      </span>
                       {getStatusBadge(mp.status)}
                     </div>
                   </div>

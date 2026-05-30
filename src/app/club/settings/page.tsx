@@ -53,6 +53,18 @@ const DUMMY_SEARCH_BOOKS = [
 
 export default function ClubSettingsPage() {
   const router = useRouter();
+
+  // 단계 라벨 한국어 변환
+  const getStageLabel = (s: string) => {
+    switch (s) {
+      case 'reading': return '1단계: 책 읽는 중 🌱';
+      case 'question_collecting': return '2단계: 질문 수집 중 ✍️';
+      case 'discussion': return '3단계: 사색 나누는 중 💬';
+      case 'archiving': return '4단계: 결산 및 아카이빙 📦';
+      default: return '책 읽는 중 🌱';
+    }
+  };
+
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [activeClub, setActiveClub] = useState<BookClub | null>(null);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
@@ -65,9 +77,34 @@ export default function ClubSettingsPage() {
   const [isFlowModalOpen, setIsFlowModalOpen] = useState(false);
   const [isActionLoading, setIsActionLoading] = useState(false);
 
+  // 책 상세 수정 상태
+  const [isBookEditModalOpen, setIsBookEditModalOpen] = useState(false);
+  const [editBookTitle, setEditBookTitle] = useState('');
+  const [editBookAuthor, setEditBookAuthor] = useState('');
+  const [editBookPages, setEditBookPages] = useState<string | number>('');
+  const [editBookIsbn13, setEditBookIsbn13] = useState('');
+  const [isFetchDetailLoading, setIsFetchDetailLoading] = useState(false);
+  const [editBookError, setEditBookError] = useState<string | null>(null);
+  const [editBookSuccess, setEditBookSuccess] = useState<string | null>(null);
+
+  // 모달 오픈 시 기존 책 정보 채워넣기
+  const openEditBookModal = () => {
+    if (activeBook) {
+      setEditBookTitle(activeBook.title);
+      setEditBookAuthor(activeBook.author || '');
+      setEditBookPages(activeBook.total_pages && activeBook.total_pages > 1 ? activeBook.total_pages : '');
+      setEditBookIsbn13(activeBook.isbn13 || '');
+      setEditBookError(null);
+      setEditBookSuccess(null);
+      setIsBookEditModalOpen(true);
+    }
+  };
+
   // 책 검색 상태
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState(DUMMY_SEARCH_BOOKS);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   // 모임 정보 수정 상태
   const [clubTitleInput, setClubTitleInput] = useState('');
@@ -348,70 +385,47 @@ export default function ClubSettingsPage() {
   const calculatedTimeline = getTimelineDates();
 
   // 2. 공유책 변경 기능
-  const handleSelectBook = async (selectedBook: typeof DUMMY_SEARCH_BOOKS[0]) => {
+  const handleSelectBook = async (selectedBook: any) => {
     if (!activeClub || !activeBook) return;
 
     setIsActionLoading(true);
 
     try {
       if (!isMockMode && supabase) {
-        // 1. books 테이블에서 중복 확인
-        const { data: existing, error: searchError } = await supabase
-          .from('books')
-          .select('id')
-          .eq('title', selectedBook.title.trim())
-          .eq('author', selectedBook.author.trim())
-          .maybeSingle();
-
-        if (searchError) throw searchError;
-
-        let targetBookId = '';
-        if (existing) {
-          targetBookId = existing.id;
-        } else {
-          // 2. books 테이블에 신규 등록
-          const { data: newBook, error: insertError } = await supabase
-            .from('books')
-            .insert({
-              title: selectedBook.title.trim(),
-              author: selectedBook.author.trim(),
-              total_pages: selectedBook.total_pages,
-              cover_url: selectedBook.cover_url
-            })
-            .select('id')
-            .single();
-
-          if (insertError) throw insertError;
-          targetBookId = newBook.id;
-        }
+        // 공용 findOrCreateBook 헬퍼를 사용하여 DB 중복 검사 및 생성 수행
+        const { id: targetBookId } = await mockApi.books.findOrCreateBook({
+          title: selectedBook.title,
+          author: selectedBook.author,
+          total_pages: selectedBook.total_pages || selectedBook.totalPages || null,
+          cover_url: selectedBook.cover_url || selectedBook.coverUrl,
+          isbn: selectedBook.isbn,
+          isbn13: selectedBook.isbn13,
+          source: selectedBook.source || 'aladin',
+          source_id: selectedBook.source_id || selectedBook.sourceId,
+          publisher: selectedBook.publisher,
+          description: selectedBook.description,
+          published_at: selectedBook.published_at || selectedBook.publishedAt
+        });
 
         // 3. monthly_books.book_id 업데이트
         await mockApi.clubs.updateMonthlyBook(activeClub.id, {
           book_id: targetBookId
         });
 
-        // 4. 모임원들 진행도 리셋 (새 도서의 user_books 레코드를 0p / reading으로 셋팅)
-        const { data: membersList, error: memError } = await supabase
-          .from('group_members')
-          .select('user_id')
-          .eq('group_id', activeClub.id);
-
-        if (memError) throw memError;
-
-        const uids = (membersList || []).map(m => m.user_id);
-        for (const uid of uids) {
-          // 신규 책에 대한 user_books 존재 확인
+        // 4. 방장 본인 진행도 리셋 (새 도서의 user_books 레코드를 0p / reading으로 셋팅)
+        if (currentUser) {
+          console.log('[settings] handleSelectBook resetting progress for admin. userId:', currentUser.id, 'bookId:', targetBookId);
           const { data: ub, error: ubError } = await supabase
             .from('user_books')
             .select('id')
-            .eq('user_id', uid)
+            .eq('user_id', currentUser.id)
             .eq('book_id', targetBookId)
             .maybeSingle();
 
           if (ubError) throw ubError;
 
           if (ub) {
-            // 존재하면 0p로 초기화
+            console.log('[settings] handleSelectBook updating existing user_books entry. id:', ub.id);
             const { error: updError } = await supabase
               .from('user_books')
               .update({
@@ -423,11 +437,11 @@ export default function ClubSettingsPage() {
 
             if (updError) throw updError;
           } else {
-            // 없으면 0p로 인서트
+            console.log('[settings] handleSelectBook inserting new user_books entry for admin.');
             const { error: insError } = await supabase
               .from('user_books')
               .insert({
-                user_id: uid,
+                user_id: currentUser.id,
                 book_id: targetBookId,
                 current_page: 0,
                 status: 'reading'
@@ -508,8 +522,148 @@ export default function ClubSettingsPage() {
       setIsBookModalOpen(false);
       alert(`공유 도서가 [${selectedBook.title}]로 변경되었으며, 진척도가 리셋되었습니다.`);
     } catch (err: any) {
+      const errDetails = {
+        function: 'handleSelectBook',
+        message: err?.message || err,
+        code: err?.code || 'No code',
+        details: err?.details || 'No details',
+        hint: err?.hint || 'No hint',
+        payload: {
+          clubId: activeClub?.id,
+          book: selectedBook
+        }
+      };
+      console.error('[settings] handleSelectBook error:', errDetails);
+      alert(`공유 도서 변경에 실패했습니다.\n\n[상세 에러]\n${errDetails.message} (Code: ${errDetails.code})`);
+    } finally {
+      setIsActionLoading(false);
+    }
+  };
+
+  // 도서 정보 보완 기능 (알라딘 ItemLookUp 연동)
+  const handleEnhanceBookInfo = async () => {
+    if (!activeBook) return;
+    
+    const searchIsbn = editBookIsbn13 || activeBook.isbn13 || activeBook.isbn;
+    if (!searchIsbn) {
+      setEditBookError('도서의 ISBN 정보가 없어 알라딘 정보를 불러올 수 없습니다. 직접 입력란에 입력해 주세요.');
+      return;
+    }
+
+    setIsFetchDetailLoading(true);
+    setEditBookError(null);
+    setEditBookSuccess(null);
+
+    try {
+      const response = await fetch(`/api/books/search?lookup=${encodeURIComponent(searchIsbn.trim())}`);
+      if (!response.ok) {
+        throw new Error('API request failed');
+      }
+      const data = await response.json();
+      const fetchedPages = data.totalPages || data.total_pages;
+      
+      const updateData: any = {
+        description: data.description || activeBook.description || null,
+        publisher: data.publisher || activeBook.publisher || null,
+        published_at: data.published_at || activeBook.published_at || null,
+        cover_url: data.cover_url || activeBook.cover_url || null,
+        isbn13: data.isbn13 || activeBook.isbn13 || null,
+        isbn: data.isbn || activeBook.isbn || null
+      };
+
+      if (fetchedPages && fetchedPages > 1) {
+        updateData.total_pages = fetchedPages;
+        setEditBookPages(fetchedPages);
+      }
+
+      if (!isMockMode && supabase) {
+        const { error } = await supabase
+          .from('books')
+          .update(updateData)
+          .eq('id', activeBook.id);
+        if (error) throw error;
+      } else {
+        const KEY_BOOKS = 'bookclub_mock_books';
+        const storedBooks = localStorage.getItem(KEY_BOOKS);
+        const booksList = storedBooks ? JSON.parse(storedBooks) : [];
+        const updated = booksList.map((b: any) => {
+          if (b.id === activeBook.id) {
+            return { ...b, ...updateData };
+          }
+          return b;
+        });
+        localStorage.setItem(KEY_BOOKS, JSON.stringify(updated));
+      }
+
+      if (fetchedPages && fetchedPages > 1) {
+        setEditBookSuccess('도서 정보가 보완되었어요. ✨');
+      } else {
+        setEditBookSuccess('일부 정보만 보완되었어요. (페이지 수 누락)');
+      }
+
+      // UI 및 activeBook 동기화
+      if (currentUser && activeClub) {
+        const updatedBook = await mockApi.books.getByClub(activeClub.id);
+        setActiveBook(updatedBook);
+      }
+    } catch (err) {
       console.error(err);
-      alert(`공유 도서 변경에 실패했습니다.\n\n[상세 에러]\n${err.message || err}`);
+      setEditBookError('도서 정보를 불러오지 못했어요. 직접 입력해주세요.');
+    } finally {
+      setIsFetchDetailLoading(false);
+    }
+  };
+
+  // 도서 정보 수동 저장
+  const handleSaveBookInfo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeBook || !activeClub || !currentUser) return;
+
+    setIsActionLoading(true);
+    setEditBookError(null);
+    setEditBookSuccess(null);
+
+    const pages = Number(editBookPages);
+    if (editBookPages !== '' && (isNaN(pages) || pages < 2 || !Number.isInteger(pages))) {
+      setEditBookError('총 페이지 수는 2페이지 이상의 정수여야 합니다.');
+      setIsActionLoading(false);
+      return;
+    }
+
+    const updateData: any = {
+      title: editBookTitle.trim(),
+      author: editBookAuthor.trim(),
+      total_pages: editBookPages !== '' ? pages : null,
+      isbn13: editBookIsbn13.trim() || null
+    };
+
+    try {
+      if (!isMockMode && supabase) {
+        const { error } = await supabase
+          .from('books')
+          .update(updateData)
+          .eq('id', activeBook.id);
+        if (error) throw error;
+      } else {
+        const KEY_BOOKS = 'bookclub_mock_books';
+        const storedBooks = localStorage.getItem(KEY_BOOKS);
+        const booksList = storedBooks ? JSON.parse(storedBooks) : [];
+        const updated = booksList.map((b: any) => {
+          if (b.id === activeBook.id) {
+            return { ...b, ...updateData };
+          }
+          return b;
+        });
+        localStorage.setItem(KEY_BOOKS, JSON.stringify(updated));
+      }
+
+      setIsBookEditModalOpen(false);
+      const updatedBook = await mockApi.books.getByClub(activeClub.id);
+      setActiveBook(updatedBook);
+      alert('도서 정보가 저장되었습니다.');
+    } catch (err) {
+      console.error(err);
+      setEditBookError('도서 정보 저장에 실패했습니다. 다시 시도해 주세요.');
     } finally {
       setIsActionLoading(false);
     }
@@ -670,17 +824,33 @@ export default function ClubSettingsPage() {
 
   // 도서 실시간 검색
   const handleSearchBook = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setSearchQuery(val);
-    if (!val.trim()) {
-      setSearchResults(DUMMY_SEARCH_BOOKS);
-    } else {
-      setSearchResults(DUMMY_SEARCH_BOOKS.filter(b => 
-        b.title.toLowerCase().includes(val.toLowerCase()) || 
-        b.author.toLowerCase().includes(val.toLowerCase())
-      ));
-    }
+    setSearchQuery(e.target.value);
   };
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchLoading(true);
+      setSearchError(null);
+      try {
+        const res = await fetch(`/api/books/search?query=${encodeURIComponent(searchQuery)}`);
+        if (!res.ok) throw new Error('API 호출 실패');
+        const data = await res.json();
+        setSearchResults(data.books || []);
+      } catch (err) {
+        console.error(err);
+        setSearchError('도서 검색에 실패했습니다.');
+      } finally {
+        setIsSearchLoading(false);
+      }
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const selectedQuestions = questions.filter(q => q.status === 'selected');
   const suggestedQuestions = questions.filter(q => q.status === 'suggested');
@@ -696,80 +866,81 @@ export default function ClubSettingsPage() {
     }
   });
 
-  // 단계 라벨 한국어 맵
-  const getStageLabel = (s: string) => {
-    switch (s) {
-      case 'reading': return '책에 몰입 중';
-      case 'question_collecting': return '질문 정제 중';
-      case 'discussion': return '생각 나누기 중';
-      case 'archiving': return '결산 준비 중';
-      default: return '질문 정제 중';
-    }
-  };
-
   return (
-    <div className="flex-grow flex flex-col bg-background text-foreground">
+    <div className="min-h-screen bg-[#FBFBF9] text-foreground font-sans flex flex-col max-w-[480px] mx-auto relative border-x border-card-border/40 pb-16">
       
-      {/* 1. 상단 내비바 헤더 */}
-      <header className="sticky top-0 bg-background/90 backdrop-blur-md border-b border-card-border px-4 py-3 flex items-center gap-3 z-30">
+      {/* 1. 상단 타이틀 바 */}
+      <header className="sticky top-0 bg-[#FBFBF9]/80 backdrop-blur-md z-30 px-4 py-3 border-b border-card-border/30 flex items-center justify-between">
         <button 
           onClick={() => router.push('/club')}
-          className="w-8 h-8 rounded-full border border-card-border flex justify-center items-center text-foreground/75 hover:bg-sage-light/30 transition-all cursor-pointer"
+          className="w-8 h-8 rounded-full border border-card-border flex justify-center items-center text-foreground/75 hover:bg-foreground/5 transition-all cursor-pointer"
         >
-          <ArrowLeft size={15} />
+          <ArrowLeft size={14} />
         </button>
-        <div className="flex flex-col min-w-0">
-          <span className="text-[7.5px] font-black text-sage-dark uppercase tracking-widest leading-none">독서 흐름 운영 패널</span>
-          <h1 className="text-sm font-black text-foreground mt-0.5 truncate">{activeClub?.title || '북클럽'}</h1>
-        </div>
-        <div className="ml-auto w-7 h-7 bg-sage-light/40 border border-sage-light rounded-lg flex justify-center items-center text-sage-dark">
-          <Settings size={13} className="animate-spin-slow" />
-        </div>
+        <h2 className="text-xs font-black tracking-wide text-foreground">운영실</h2>
+        <div className="w-8" />
       </header>
 
-      {/* 2. 모임 정보 수정 UX 카드화 */}
-      <div 
-        onClick={() => setIsClubInfoModalOpen(true)}
-        className="mx-4 mt-4 bg-card-bg border border-card-border hover:border-sage-medium rounded-xl p-3.5 flex flex-col gap-1.5 shadow-xs cursor-pointer transition-all duration-200 hover:shadow-sm group"
-      >
-        <div className="flex justify-between items-center">
-          <span className="text-[8px] font-black text-sage-dark/80 uppercase tracking-widest leading-none">모임 소개 정보</span>
-          <span className="text-[9.5px] text-sage-dark font-black flex items-center gap-1 group-hover:text-sage-medium transition-colors">
-            <Edit3 size={10} />
-            모임 소개 다듬기
-          </span>
+       {/* 2. 운영 상태 요약 대시보드 (상단) */}
+      <div className="mx-4 mt-4 bg-card-bg border border-card-border rounded-xl p-5 shadow-xs flex flex-col gap-4 relative overflow-hidden">
+        {/* 데코 링 */}
+        <div className="absolute -top-12 -left-12 w-28 h-28 bg-sage-light/10 rounded-full -z-10" />
+        
+        <div className="flex justify-between items-center pb-2 border-b border-card-border/40">
+          <span className="text-[9.5px] font-black text-sage-dark uppercase tracking-widest leading-none">운영실 대시보드 🌙</span>
+          <span className="text-[8px] font-extrabold text-foreground/45">이번 달 독서 현황 요약</span>
         </div>
-        <p className="text-[10.5px] text-foreground/60 font-semibold leading-relaxed">
-          {activeClub?.description || '소개글과 다짐이 채워지는 공간'}
-        </p>
+        
+        <div className="grid grid-cols-3 gap-2.5">
+          <div className="bg-sage-light/5 border border-card-border/55 rounded-lg p-2.5 text-center flex flex-col justify-between h-14">
+            <span className="text-[7.5px] font-extrabold text-foreground/45 leading-none">현재 단계</span>
+            <span className="text-[9.5px] font-black text-sage-dark truncate mt-1.5">{getStageLabel(stage)}</span>
+          </div>
+          <div className="bg-sage-light/5 border border-card-border/55 rounded-lg p-2.5 text-center flex flex-col justify-between h-14">
+            <span className="text-[7.5px] font-extrabold text-foreground/45 leading-none">참여 인원</span>
+            <span className="text-xs font-black text-sage-dark mt-1.5">{members.length}명</span>
+          </div>
+          <div className="bg-sage-light/5 border border-card-border/55 rounded-lg p-2.5 text-center flex flex-col justify-between h-14">
+            <span className="text-[7.5px] font-extrabold text-foreground/45 leading-none">사색 질문</span>
+            <span className="text-xs font-black text-sage-dark mt-1.5">선정 {selectedQuestions.length} / 후보 {suggestedQuestions.length}</span>
+          </div>
+        </div>
+
+        {activeBook && (
+          <div className="flex gap-2.5 items-center bg-background/40 border border-card-border/30 rounded-xl p-2.5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img 
+              src={activeBook.cover_url || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80'} 
+              alt="책 표지" 
+              className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <span className="text-[7px] font-bold text-sage-medium uppercase tracking-wider block">진행 중인 도서</span>
+              <h4 className="text-[11px] font-black text-foreground truncate mt-0.5">{activeBook.title}</h4>
+              <p className="text-[9px] text-foreground/45 truncate leading-none mt-0.5">{activeBook.author}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 3. 본문 콤팩트 패널 영역 */}
       <main className="p-4 flex flex-col gap-4 pb-10">
-        
-        {/* 가이드 메시지 배너 */}
-        <div className="bg-sage-light/15 border border-sage-light/40 rounded-xl p-3 flex gap-2.5 items-start shadow-xs">
-          <CheckCircle2 size={14} className="text-sage-medium mt-0.5 flex-shrink-0" />
-          <p className="text-[9px] text-foreground/60 leading-relaxed font-semibold">
-            이곳은 독서 흐름을 정돈하는 조용한 운영 공간입니다. 책을 선정하고, 사색 질문을 정제하며 서재를 가꾸어보세요.
-          </p>
-        </div>
 
-        {/* SECTION 1. 이번 달 독서 흐름 (자동 계산 적용) */}
-        <section className="bg-card-bg border border-card-border rounded-xl p-4.5 shadow-sm flex flex-col gap-3.5">
-          <div className="flex justify-between items-center">
+        {/* SECTION 1. 이번 달 독서 운영 (일정 및 질문 통합 섹션) */}
+        <section className="bg-card-bg border border-card-border rounded-xl p-5 shadow-sm flex flex-col gap-5">
+          <div className="flex justify-between items-center pb-2 border-b border-card-border/40">
             <div className="flex items-center gap-1.5">
               <div className="w-6.5 h-6.5 bg-sage-light rounded-lg flex justify-center items-center text-sage-dark">
                 <BookOpen size={12} />
               </div>
-              <h3 className="text-xs font-black text-foreground">이번 달 독서 흐름</h3>
+              <h3 className="text-xs font-black text-foreground">이번 달 독서 운영</h3>
             </div>
-            <span className="bg-sage-medium/15 text-sage-dark border border-sage-medium/20 text-[8.5px] font-black px-2 py-0.5 rounded-full animate-pulse">
+            <span className="bg-sage-medium/15 text-sage-dark border border-sage-medium/20 text-[8.5px] font-black px-2 py-0.5 rounded-full">
               {getStageLabel(stage)}
             </span>
           </div>
 
-          {/* 공유책 및 흐름 조율 버튼 */}
+          {/* 현재 진행 중인 도서 정보 및 수정/변경 버튼 */}
           {activeBook ? (
             <div className="bg-background border border-card-border/80 rounded-xl p-3 flex gap-3 items-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -781,18 +952,26 @@ export default function ClubSettingsPage() {
               <div className="flex-1 min-w-0">
                 <span className="text-[8px] font-bold text-sage-dark uppercase leading-none">선정 도서</span>
                 <h4 className="text-xs font-black text-foreground truncate mt-0.5">{activeBook.title}</h4>
-                <span className="text-[9px] text-foreground/45 font-medium truncate leading-none">{activeBook.author}</span>
+                <p className="text-[9.5px] text-foreground/45 truncate mt-0.5">
+                  {activeBook.author} {activeBook.total_pages && activeBook.total_pages > 1 ? `· 전체 ${activeBook.total_pages}p` : ''}
+                </p>
               </div>
-              <button 
-                onClick={() => {
-                  setIsAdvanced(false);
-                  setIsFlowModalOpen(true);
-                }}
-                className="px-2.5 py-1.5 bg-sage-medium hover:bg-sage-dark text-white rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs flex items-center gap-1"
-              >
-                <Edit3 size={10} />
-                흐름 설정
-              </button>
+              <div className="flex flex-col gap-1.5">
+                <button 
+                  type="button"
+                  onClick={openEditBookModal}
+                  className="px-2 py-1 border border-sage-light text-sage-dark hover:bg-sage-light/20 text-[9px] font-black rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
+                >
+                  도서 수정
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setIsBookModalOpen(true)}
+                  className="px-2 py-1 bg-sage-medium hover:bg-sage-dark text-white text-[9px] font-black rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1 shadow-xs"
+                >
+                  책 변경
+                </button>
+              </div>
             </div>
           ) : (
             <div className="h-14 bg-background border border-dashed border-card-border rounded-xl flex items-center justify-center text-[9px] text-foreground/40 font-medium">
@@ -800,74 +979,78 @@ export default function ClubSettingsPage() {
             </div>
           )}
 
-          {/* 타임라인 가로 3단 그리드 (계산된 날짜 투영) */}
-          <div className="grid grid-cols-3 gap-2 mt-0.5">
-            <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
-              stage === 'reading' 
-                ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
-                : 'bg-background/55 border-card-border/40 text-foreground/50'
-            }`}>
-              <span className="text-[7.5px] font-black uppercase">1단계: 몰입</span>
-              <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.reading}</span>
+          {/* 독서 일정 타임라인 */}
+          <div className="flex flex-col gap-2 bg-background/30 border border-card-border/40 rounded-xl p-3">
+            <div className="flex justify-between items-center">
+              <span className="text-[8.5px] font-extrabold text-foreground/45 uppercase tracking-wider">독서 흐름 일정</span>
+              <button 
+                type="button"
+                onClick={() => {
+                  setIsAdvanced(false);
+                  setIsFlowModalOpen(true);
+                }}
+                className="text-[9px] text-sage-dark font-black hover:text-sage-medium flex items-center gap-0.5 cursor-pointer"
+              >
+                <Sliders size={10} />
+                일정 조율
+              </button>
             </div>
-            <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
-              stage === 'question_collecting' 
-                ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
-                : 'bg-background/55 border-card-border/40 text-foreground/50'
-            }`}>
-              <span className="text-[7.5px] font-black uppercase flex items-center gap-0.5">
-                {stage === 'question_collecting' && <span className="w-1 h-1 bg-sage-medium rounded-full animate-pulse" />}
-                2단계: 정제
-              </span>
-              <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.question}</span>
-            </div>
-            <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
-              stage === 'discussion' 
-                ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
-                : 'bg-background/55 border-card-border/40 text-foreground/50'
-            }`}>
-              <span className="text-[7.5px] font-black uppercase flex items-center gap-0.5">
-                {stage === 'discussion' && <span className="w-1 h-1 bg-sage-medium rounded-full animate-pulse" />}
-                3단계: 나눔
-              </span>
-              <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.discussion}</span>
+            
+            <div className="grid grid-cols-3 gap-2 mt-1">
+              <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
+                stage === 'reading' 
+                  ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
+                  : 'bg-background/55 border-card-border/40 text-foreground/50'
+              }`}>
+                <span className="text-[7.5px] font-black uppercase">1단계: 몰입</span>
+                <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.reading}</span>
+              </div>
+              <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
+                stage === 'question_collecting' 
+                  ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
+                  : 'bg-background/55 border-card-border/40 text-foreground/50'
+              }`}>
+                <span className="text-[7.5px] font-black uppercase flex items-center gap-0.5 justify-center">
+                  {stage === 'question_collecting' && <span className="w-1 h-1 bg-sage-medium rounded-full animate-pulse" />}
+                  2단계: 씨앗 고르기
+                </span>
+                <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.question}</span>
+              </div>
+              <div className={`flex flex-col items-center p-1.5 border rounded-lg text-center ${
+                stage === 'discussion' 
+                  ? 'bg-sage-light/20 border-sage-medium text-sage-dark font-black' 
+                  : 'bg-background/55 border-card-border/40 text-foreground/50'
+              }`}>
+                <span className="text-[7.5px] font-black uppercase flex items-center gap-0.5 justify-center">
+                  {stage === 'discussion' && <span className="w-1 h-1 bg-sage-medium rounded-full animate-pulse" />}
+                  3단계: 나눔
+                </span>
+                <span className="text-[8.5px] font-semibold mt-0.5">{calculatedTimeline.discussion}</span>
+              </div>
             </div>
           </div>
-        </section>
 
-        {/* SECTION 2. 사색 질문 정리 및 큐레이터 */}
-        <section className="bg-card-bg border border-card-border rounded-xl p-4.5 shadow-sm flex flex-col gap-3.5">
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-1.5">
-              <div className="w-6.5 h-6.5 bg-warm-beige/10 rounded-lg flex justify-center items-center text-warm-beige">
-                <MessageSquareQuote size={12} />
+          <div className="h-px bg-card-border/50 my-0.5" />
+
+          {/* 사색 질문 정리 및 큐레이터 */}
+          <div className="flex flex-col gap-3">
+            <div className="flex justify-between items-center">
+              <span className="text-[8.5px] font-extrabold text-foreground/45 uppercase tracking-wider">선정된 사색 질문 ({selectedQuestions.length}개)</span>
+            </div>
+
+            {actionError && (
+              <div className="bg-red-500/5 border border-red-500/20 text-red-500/85 text-[9px] font-extrabold px-3 py-2 rounded-xl flex items-center gap-1.5 animate-fade-in">
+                <AlertCircle size={12} className="flex-shrink-0" />
+                <span>{actionError}</span>
               </div>
-              <div className="flex flex-col">
-                <h3 className="text-xs font-black text-foreground">사색 질문 정리</h3>
-              </div>
-            </div>
-            <div className="bg-warm-beige/15 border border-warm-beige/20 text-warm-beige text-[8.5px] font-black px-2 py-0.5 rounded-full">
-              선정 {selectedQuestions.length}개
-            </div>
-          </div>
+            )}
 
-          {/* 액션 에러 메시지 표시 */}
-          {actionError && (
-            <div className="bg-red-500/5 border border-red-500/20 text-red-500/85 text-[9px] font-extrabold px-3 py-2 rounded-xl flex items-center gap-1.5 animate-fade-in">
-              <AlertCircle size={12} className="flex-shrink-0" />
-              <span>{actionError}</span>
-            </div>
-          )}
-
-          {/* 2-A. 선정 질문 요약 (제거 액션 바인딩) */}
-          {selectedQuestions.length > 0 ? (
-            <div className="bg-sage-light/10 border border-sage-light/45 rounded-xl p-3 flex flex-col gap-1.5">
-              <span className="text-[8px] font-black text-sage-dark uppercase tracking-wider">선정된 사색 질문 목록</span>
+            {selectedQuestions.length > 0 ? (
               <ul className="flex flex-col gap-1.5">
                 {selectedQuestions.map((q) => (
-                  <li key={q.id} className="text-[10px] text-foreground/80 font-bold leading-normal flex items-center justify-between gap-3 bg-background/55 border border-card-border/30 px-2 py-1 rounded-lg shadow-xs">
+                  <li key={q.id} className="text-[10px] text-foreground/80 font-bold leading-normal flex items-center justify-between gap-3 bg-background border border-card-border/40 px-3 py-1.5 rounded-lg shadow-xs">
                     <div className="flex items-start gap-1 min-w-0">
-                      <span className="text-sage-medium flex-shrink-0 font-bold mt-0.5">•</span>
+                      <span className="text-sage-medium flex-shrink-0 font-bold">•</span>
                       <span className="truncate">{q.content}</span>
                     </div>
                     <button 
@@ -880,21 +1063,22 @@ export default function ClubSettingsPage() {
                   </li>
                 ))}
               </ul>
-            </div>
-          ) : (
-            <div className="bg-sage-light/5 border border-sage-light/35 rounded-xl p-2.5 text-center text-[9px] text-sage-dark/60 font-semibold">
-              선정된 질문이 없습니다. 아래 후보 중에서 선정해 주세요.
-            </div>
-          )}
+            ) : (
+              <div className="bg-sage-light/5 border border-sage-light/35 rounded-xl p-2.5 text-center text-[9px] text-sage-dark/60 font-semibold">
+                선정된 질문이 없습니다. 아래 후보 중에서 선정해 주세요.
+              </div>
+            )}
+          </div>
 
-          {/* 2-B. 질문 후보 divide-y 리스트 및 필터 */}
+          {/* 질문 후보 리스트 */}
           <div className="flex flex-col gap-2.5">
-            <div className="flex justify-between items-center px-0.5">
-              <span className="text-[8.5px] font-extrabold text-foreground/45 uppercase tracking-wider">질문 후보 리스트</span>
+            <div className="flex justify-between items-center">
+              <span className="text-[8.5px] font-extrabold text-foreground/45 uppercase tracking-wider">사색 질문 후보</span>
               
               {/* 정렬 필터 */}
               <div className="flex bg-foreground/5 p-0.5 rounded-lg border border-card-border/40">
                 <button 
+                  type="button"
                   onClick={() => setSortOrder('likes')}
                   className={`px-2 py-0.5 text-[8.5px] font-black rounded-md transition-all cursor-pointer ${
                     sortOrder === 'likes' 
@@ -905,6 +1089,7 @@ export default function ClubSettingsPage() {
                   공감순
                 </button>
                 <button 
+                  type="button"
                   onClick={() => setSortOrder('latest')}
                   className={`px-2 py-0.5 text-[8.5px] font-black rounded-md transition-all cursor-pointer ${
                     sortOrder === 'latest' 
@@ -918,17 +1103,18 @@ export default function ClubSettingsPage() {
             </div>
             
             {sortedSuggestedQuestions.length === 0 ? (
-              <div className="text-center py-5 text-[9px] text-foreground/40 font-semibold border border-card-border border-dashed rounded-xl">
-                후보 리스트가 비어 있습니다.
+              <div className="text-center py-4 px-3 text-[9.5px] text-foreground/50 font-semibold bg-background/40 border border-card-border border-dashed rounded-xl leading-relaxed">
+                🌱 아직 질문 후보가 없어요.<br />
+                읽으며 떠오른 질문을 토론방에서 제안해보세요.
               </div>
             ) : (
-              <div className="flex flex-col border border-card-border rounded-xl divide-y divide-card-border overflow-hidden">
+              <div className="flex flex-col border border-card-border rounded-xl divide-y divide-card-border overflow-hidden bg-background/25">
                 {sortedSuggestedQuestions.map(q => {
                   const isSelected = q.status === 'selected';
                   return (
                     <div 
                       key={q.id} 
-                      className="bg-card-bg p-3 flex justify-between items-center gap-3.5 hover:bg-background/25 transition-all"
+                      className="p-3 flex justify-between items-center gap-3.5 hover:bg-background/45 transition-all"
                     >
                       <div className="flex-1 min-w-0 flex flex-col gap-1">
                         <p className="text-[11px] text-foreground/85 leading-relaxed font-semibold text-justify line-clamp-2">
@@ -967,33 +1153,46 @@ export default function ClubSettingsPage() {
           </div>
         </section>
 
-        {/* SECTION 3. 참여자 관리 */}
+        {/* SECTION 2. 하단: 모임 관리 */}
         <section className="bg-card-bg border border-card-border rounded-xl p-4.5 shadow-sm flex flex-col gap-3">
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center pb-1 border-b border-card-border/40">
             <div className="flex items-center gap-1.5">
               <div className="w-6.5 h-6.5 bg-sage-light rounded-lg flex justify-center items-center text-sage-dark">
                 <Users size={12} />
               </div>
               <h3 className="text-xs font-black text-foreground">
-                {members.length === 1 ? '서재 관리 및 동반자 초대' : `참여자 관리 (${members.length}명)`}
+                {members.length === 1 ? '서재 관리 및 동반자 초대' : '모임 관리'}
               </h3>
             </div>
-            <button 
-              onClick={handleCopyInviteCode}
-              className="text-[8.5px] text-sage-dark font-black flex items-center gap-1 border border-sage-light/80 px-2 py-0.5 rounded-lg bg-sage-light/10 hover:bg-sage-light/45 transition-all cursor-pointer"
-            >
-              <Copy size={9} />
-              초대코드
-            </button>
+            <div className="flex gap-1.5">
+              <button 
+                type="button"
+                onClick={() => setIsClubInfoModalOpen(true)}
+                className="text-[8.5px] text-sage-dark font-black flex items-center gap-1 border border-sage-light/80 px-2 py-0.5 rounded-lg bg-sage-light/10 hover:bg-sage-light/45 transition-all cursor-pointer"
+              >
+                <Edit3 size={9} />
+                정보 수정
+              </button>
+              <button 
+                type="button"
+                onClick={handleCopyInviteCode}
+                className="text-[8.5px] text-sage-dark font-black flex items-center gap-1 border border-sage-light/80 px-2 py-0.5 rounded-lg bg-sage-light/10 hover:bg-sage-light/45 transition-all cursor-pointer"
+              >
+                <Copy size={9} />
+                초대코드
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-col gap-2">
+            <span className="text-[8.5px] font-extrabold text-foreground/45 uppercase tracking-wider pl-0.5">참여자 목록 ({members.length}명)</span>
+            
             {members.map(member => {
               const avatarUrl = member.profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${member.user_id}`;
               const isMe = member.user_id === currentUser?.id;
               
               return (
-                <div key={member.id} className="flex items-center justify-between bg-background border border-card-border/50 rounded-xl p-2">
+                <div key={member.id} className="flex items-center justify-between bg-background border border-card-border/50 rounded-xl p-2 shadow-xs">
                   <div className="flex items-center gap-2 min-w-0">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img 
@@ -1019,7 +1218,7 @@ export default function ClubSettingsPage() {
                   {!isMe && (
                     <button 
                       onClick={() => handleKickMember(member.user_id, member.profile?.username || '모임원')}
-                      className="w-6.5 h-6.5 rounded-md border border-card-border flex justify-center items-center text-foreground/30 hover:text-red-500 hover:bg-red-50 transition-all cursor-pointer"
+                      className="w-6.5 h-6.5 rounded-md border border-card-border flex justify-center items-center text-foreground/30 hover:text-red-500 hover:bg-red-50 transition-all cursor-pointer animate-fade-in"
                       title="내보내기"
                     >
                       <UserX size={10} />
@@ -1030,7 +1229,7 @@ export default function ClubSettingsPage() {
             })}
 
             {members.length === 1 && (
-              <div className="mt-0.5 bg-sage-light/15 border border-sage-light/45 rounded-xl p-2.5 text-[8.5px] text-sage-dark/85 leading-relaxed font-semibold">
+              <div className="mt-1 bg-sage-light/10 border border-sage-light/40 rounded-xl p-3 text-[9px] text-sage-dark/85 leading-relaxed font-semibold">
                 🌱 <b>나만의 아늑한 서재</b>: 현재 혼자서 생각을 기록 중입니다. 초대코드를 공유해 친구와 함께 읽는 공간으로 확장해보세요.
               </div>
             )}
@@ -1171,7 +1370,7 @@ export default function ClubSettingsPage() {
               <div className="grid grid-cols-2 gap-2">
                 {[
                   { value: 'reading', label: '1. 책에 몰입' },
-                  { value: 'question_collecting', label: '2. 질문 정제' },
+                  { value: 'question_collecting', label: '2. 이야기 씨앗 고르기' },
                   { value: 'discussion', label: '3. 생각 나누기' },
                   { value: 'archiving', label: '4. 결산 준비' }
                 ].map((item) => (
@@ -1319,7 +1518,7 @@ export default function ClubSettingsPage() {
                   if (isActionLoading) return;
                   setIsBookModalOpen(false);
                   setSearchQuery('');
-                  setSearchResults(DUMMY_SEARCH_BOOKS);
+                  setSearchResults([]);
                 }}
                 disabled={isActionLoading}
                 className="w-6.5 h-6.5 rounded-full border border-card-border flex justify-center items-center text-foreground/50 hover:bg-foreground/5 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
@@ -1344,7 +1543,17 @@ export default function ClubSettingsPage() {
             <div className="flex flex-col gap-2 overflow-y-auto max-h-80 pr-1">
               <span className="text-[8px] font-extrabold text-foreground/45 uppercase tracking-wider px-0.5">추천 도서 목록</span>
               
-              {searchResults.length === 0 ? (
+              {isSearchLoading ? (
+                <div className="py-8 flex justify-center items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-sage-medium border-t-transparent rounded-full animate-spin" />
+                  <span className="text-[10px] text-sage-dark font-semibold">책 검색 중...</span>
+                </div>
+              ) : searchError ? (
+                <div className="py-4 text-center text-xs text-red-500 font-semibold leading-relaxed flex flex-col items-center gap-1.5 animate-fade-in">
+                  <AlertCircle size={18} className="text-red-500/50" />
+                  <span>⚠️ {searchError}</span>
+                </div>
+              ) : searchResults.length === 0 ? (
                 <div className="text-center py-8 flex flex-col items-center gap-1.5">
                   <AlertCircle size={18} className="text-foreground/30" />
                   <span className="text-[9px] text-foreground/40 font-semibold">검색 결과가 없습니다.</span>
@@ -1364,14 +1573,16 @@ export default function ClubSettingsPage() {
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img 
-                      src={bookItem.cover_url} 
+                      src={bookItem.cover_url || bookItem.coverUrl} 
                       alt="책 표지" 
                       className="w-9 h-12 rounded object-cover border border-card-border flex-shrink-0"
                     />
                     <div className="flex-grow min-w-0 flex flex-col">
                       <h4 className="text-[10px] font-black text-foreground group-hover:text-sage-dark transition-colors truncate">{bookItem.title}</h4>
                       <span className="text-[9px] text-foreground/45 font-medium truncate leading-none mt-0.5">{bookItem.author}</span>
-                      <span className="text-[8px] font-bold text-sage-medium uppercase mt-1">{bookItem.total_pages}p font-bold</span>
+                      {bookItem.total_pages && (
+                        <span className="text-[8px] font-bold text-sage-medium uppercase mt-1">{bookItem.total_pages}p</span>
+                      )}
                     </div>
                     <div className="w-5.5 h-5.5 rounded-full bg-sage-light/20 group-hover:bg-sage-medium/20 flex justify-center items-center text-sage-medium opacity-0 group-hover:opacity-100 transition-all">
                       <Check size={10} />
@@ -1445,6 +1656,121 @@ export default function ClubSettingsPage() {
                 className="flex-1 py-2 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-sm cursor-pointer"
               >
                 저장하기
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ==========================================
+          MODAL 4: 이번 달 도서 수정 및 보완 모달 (신규)
+      ========================================== */}
+      {isBookEditModalOpen && activeBook && (
+        <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-center justify-center p-5 z-50 animate-fade-in">
+          <form 
+            onSubmit={handleSaveBookInfo}
+            className="bg-card-bg border border-card-border w-full max-w-[340px] rounded-2xl p-5 shadow-2xl flex flex-col gap-4.5 animate-scale-up"
+          >
+            <div className="flex justify-between items-center">
+              <h3 className="text-xs font-black text-foreground">도서 상세 정보 수정</h3>
+              <button 
+                type="button"
+                onClick={() => setIsBookEditModalOpen(false)}
+                className="w-6 h-6 rounded-full border border-card-border flex justify-center items-center text-foreground/40 hover:bg-foreground/5 cursor-pointer"
+              >
+                <X size={10} />
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] font-black text-foreground/45 uppercase">도서 제목</label>
+                <input 
+                  type="text" 
+                  value={editBookTitle}
+                  onChange={(e) => setEditBookTitle(e.target.value)}
+                  className="px-3 py-2 bg-background border border-card-border rounded-xl text-xs font-extrabold focus:outline-none focus:border-sage-medium"
+                  required
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] font-black text-foreground/45 uppercase">저자</label>
+                <input 
+                  type="text" 
+                  value={editBookAuthor}
+                  onChange={(e) => setEditBookAuthor(e.target.value)}
+                  className="px-3 py-2 bg-background border border-card-border rounded-xl text-xs font-semibold focus:outline-none focus:border-sage-medium"
+                  required
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] font-black text-foreground/45 uppercase">총 페이지 수 (수동 입력)</label>
+                <input 
+                  type="number" 
+                  min="2"
+                  value={editBookPages}
+                  onChange={(e) => setEditBookPages(e.target.value)}
+                  placeholder="예: 250"
+                  className="px-3 py-2 bg-background border border-card-border rounded-xl text-xs font-semibold focus:outline-none focus:border-sage-medium"
+                />
+              </div>
+              
+              <div className="flex flex-col gap-1">
+                <label className="text-[8px] font-black text-foreground/45 uppercase">ISBN13 (정보 조회용)</label>
+                <input 
+                  type="text" 
+                  value={editBookIsbn13}
+                  onChange={(e) => setEditBookIsbn13(e.target.value)}
+                  placeholder="알라딘 조회를 위해 필요합니다"
+                  className="px-3 py-2 bg-background border border-card-border rounded-xl text-xs font-semibold focus:outline-none focus:border-sage-medium"
+                />
+              </div>
+
+              {/* 고급 설정 - 도서 정보 보완 */}
+              <div className="border border-card-border/50 rounded-xl p-3 bg-background/50 flex flex-col gap-2 mt-1">
+                <span className="text-[8.5px] font-black text-sage-dark uppercase tracking-wider">고급 설정 (도서 정보 보완)</span>
+                <p className="text-[8px] text-foreground/50 leading-relaxed font-semibold">
+                  ISBN13 기준으로 알라딘에서 상세 정보(총 페이지 수, 책 소개글, 카테고리 등)를 가져와 보완합니다.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleEnhanceBookInfo}
+                  disabled={isFetchDetailLoading}
+                  className="w-full py-2 bg-sage-medium hover:bg-sage-dark disabled:bg-sage-light/60 text-white text-[9.5px] font-black rounded-lg transition-all shadow-xs flex justify-center items-center gap-1 cursor-pointer"
+                >
+                  {isFetchDetailLoading ? '보완 정보 불러오는 중...' : '알라딘 정보로 보완 🌱'}
+                </button>
+              </div>
+            </div>
+
+            {/* 에러 및 성공 피드백 배너 */}
+            {editBookError && (
+              <div className="bg-red-50 text-red-500 border border-red-100 rounded-xl px-3 py-2 text-[8.5px] font-bold flex justify-between items-center animate-fade-in">
+                <span>{editBookError}</span>
+              </div>
+            )}
+            {editBookSuccess && (
+              <div className="bg-sage-light/25 text-sage-dark border border-sage-light rounded-xl px-3 py-2 text-[8.5px] font-bold flex justify-between items-center animate-fade-in">
+                <span>{editBookSuccess}</span>
+              </div>
+            )}
+
+            <div className="flex gap-2.5 mt-1">
+              <button 
+                type="button"
+                onClick={() => setIsBookEditModalOpen(false)}
+                className="flex-1 py-2 border border-card-border text-foreground/60 rounded-xl text-[10px] font-black hover:bg-foreground/5 cursor-pointer"
+              >
+                취소
+              </button>
+              <button 
+                type="submit"
+                disabled={isActionLoading}
+                className="flex-1 py-2 bg-sage-dark hover:bg-sage-medium text-white rounded-xl text-[10px] font-black shadow-sm cursor-pointer disabled:opacity-50"
+              >
+                {isActionLoading ? '저장 중...' : '저장하기'}
               </button>
             </div>
           </form>

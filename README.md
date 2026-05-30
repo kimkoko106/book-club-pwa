@@ -55,7 +55,7 @@ SQL 스크립트 실행이 성공하면 아래 객체들이 올바르게 생성�
 ---
 
 ### 3단계: 환경변수 설정 (.env.local)
-로컬에 위치한 [.env.local](file:///.env.local) 파일을 열어, 생성한 Supabase 프로젝트의 API 키와 Endpoint 주소로 정보를 교체합니다.
+로컬에 위치한 [.env.local](file:///.env.local) 파일을 열어, 생성한 Supabase 프로젝트의 API 키와 Endpoint 주소, 그리고 발급받은 알라딘 TTB 키 정보를 설정합니다.
 
 ```bash
 # Supabase 프로젝트 settings ➔ API ➔ Project URL 값 입력
@@ -66,7 +66,15 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1...[실제-아논-키]
 
 # Mock 모드를 끄고 실제 Supabase 모드로 전환합니다.
 NEXT_PUBLIC_USE_MOCK=false
+
+# 알라딘 책검색 API TTB 키 (서버 Route 호출용, 클라이언트 노출 금지)
+ALADIN_TTB_KEY=your_aladin_ttb_key
 ```
+
+> [!IMPORTANT]
+> **Vercel 배포 시 설정**:
+> 서비스 배포(Vercel 등) 진행 시, 프로젝트 설정의 **Environment Variables** 메뉴에서 `ALADIN_TTB_KEY`를 동일하게 등록해주셔야 실시간 도서 검색 기능이 정상 동작합니다.
+
 
 ---
 

@@ -119,24 +119,45 @@ export interface Database {
           id: string
           title: string
           author: string
-          total_pages: number
+          total_pages: number | null
           cover_url: string | null
+          isbn: string | null
+          isbn13: string | null
+          source: string | null
+          source_id: string | null
+          publisher: string | null
+          description: string | null
+          published_at: string | null
           created_at: string
         }
         Insert: {
           id?: string
           title: string
           author: string
-          total_pages: number
+          total_pages?: number | null
           cover_url?: string | null
+          isbn?: string | null
+          isbn13?: string | null
+          source?: string | null
+          source_id?: string | null
+          publisher?: string | null
+          description?: string | null
+          published_at?: string | null
           created_at?: string
         }
         Update: {
           id?: string
           title?: string
           author?: string
-          total_pages?: number
+          total_pages?: number | null
           cover_url?: string | null
+          isbn?: string | null
+          isbn13?: string | null
+          source?: string | null
+          source_id?: string | null
+          publisher?: string | null
+          description?: string | null
+          published_at?: string | null
           created_at?: string
         }
         Relationships: []

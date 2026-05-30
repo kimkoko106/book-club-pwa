@@ -599,7 +599,7 @@ export default function ClubHubPage() {
 
                     {[
                       { key: 'reading', label: '책 읽기', emoji: '📖', date: timeline.reading },
-                      { key: 'question_collecting', label: '질문 수집', emoji: '🌱', date: timeline.question },
+                      { key: 'question_collecting', label: '이야기 씨앗 고르기', emoji: '🌱', date: timeline.question },
                       { key: 'discussion', label: '생각 나누기', emoji: '💬', date: timeline.discussion },
                       { key: 'archiving', label: '결산 회고', emoji: '🌙', date: '독서 마무리' }
                     ].map((step, idx) => {

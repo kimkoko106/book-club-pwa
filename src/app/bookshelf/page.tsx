@@ -129,14 +129,17 @@ export default function PersonalBookshelfPage() {
 
   // 책 추가 입력 상태
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState(DUMMY_SEARCH_BOOKS);
-  const [selectedAddBook, setSelectedAddBook] = useState<typeof DUMMY_SEARCH_BOOKS[0] | null>(null);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [selectedAddBook, setSelectedAddBook] = useState<any | null>(null);
   const [addBookStatus, setAddBookStatus] = useState<'reading' | 'completed' | 'wish'>('reading');
   const [addBookProgress, setAddBookProgress] = useState(0);
   const [isDirectInput, setIsDirectInput] = useState(false);
   const [directTitle, setDirectTitle] = useState('');
   const [directAuthor, setDirectAuthor] = useState('');
   const [directCoverUrl, setDirectCoverUrl] = useState('');
+  const [directTotalPages, setDirectTotalPages] = useState<number | ''>('');
 
   // 책장 정리 및 수정/삭제 팝업용 상태
   const [activeMenuBook, setActiveMenuBook] = useState<ShelfBook | null>(null);
@@ -216,19 +219,35 @@ export default function PersonalBookshelfPage() {
     init();
   }, []);
 
-  // 2. 도서 추가 실시간 검색
+  // 2. 도서 추가 실시간 검색 (Debounced)
   const handleSearchBook = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setSearchQuery(val);
-    if (!val.trim()) {
-      setSearchResults(DUMMY_SEARCH_BOOKS);
-    } else {
-      setSearchResults(DUMMY_SEARCH_BOOKS.filter(b => 
-        b.title.toLowerCase().includes(val.toLowerCase()) || 
-        b.author.toLowerCase().includes(val.toLowerCase())
-      ));
-    }
+    setSearchQuery(e.target.value);
   };
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchLoading(true);
+      setSearchError(null);
+      try {
+        const res = await fetch(`/api/books/search?query=${encodeURIComponent(searchQuery)}`);
+        if (!res.ok) throw new Error('API 호출 실패');
+        const data = await res.json();
+        setSearchResults(data.items || []);
+      } catch (err) {
+        console.warn('책 검색 실패:', err);
+        setSearchError('책 검색을 불러오지 못했어요...');
+      } finally {
+        setIsSearchLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
   
   // 파일 이미지 업로드 핸들러 (base64 변환)
   const handleCoverFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -430,7 +449,17 @@ export default function PersonalBookshelfPage() {
         author,
         cover_url,
         status: addBookStatus,
-        progress: Number(addBookProgress)
+        progress: Number(addBookProgress),
+        total_pages: isDirectInput 
+          ? (directTotalPages === '' ? null : Number(directTotalPages))
+          : (selectedAddBook?.total_pages || null),
+        isbn: selectedAddBook?.isbn,
+        isbn13: selectedAddBook?.isbn13,
+        source: selectedAddBook?.source || (isDirectInput ? 'manual' : 'aladin'),
+        source_id: selectedAddBook?.sourceId || selectedAddBook?.source_id,
+        publisher: selectedAddBook?.publisher,
+        description: selectedAddBook?.description,
+        published_at: selectedAddBook?.publishedAt || selectedAddBook?.published_at
       });
 
       // UI 갱신을 위해 데이터 재로드
@@ -445,10 +474,27 @@ export default function PersonalBookshelfPage() {
       setDirectTitle('');
       setDirectAuthor('');
       setDirectCoverUrl('');
+      setDirectTotalPages('');
       setIsAddBookModalOpen(false);
     } catch (err: any) {
-      console.error('책 추가 실패:', err);
-      setAddBookErrorMsg(err.message || '책을 저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+      const errorDetails = {
+        message: err?.message || 'No message',
+        code: err?.code || 'No code',
+        details: err?.details || 'No details',
+        hint: err?.hint || 'No hint',
+        stack: err?.stack || 'No stack',
+        raw: err
+      };
+      console.error('책 추가 실패:', errorDetails);
+      
+      let friendlyMessage = err.message || '책을 저장하지 못했어요. 잠시 후 다시 시도해주세요.';
+      if (friendlyMessage.includes('이미 내 책장에 담긴 책이에요') || friendlyMessage.includes('이미 내 책장에 있는 책이에요')) {
+        friendlyMessage = '이미 내 책장에 있는 책이에요.';
+      } else if (err.code === '23505') {
+        friendlyMessage = '이미 내 책장에 있는 책이에요.'; // DB Unique constraint (user_id, book_id)
+      }
+      
+      setAddBookErrorMsg(friendlyMessage);
     } finally {
       setIsAddBookLoading(false);
     }
@@ -1094,25 +1140,40 @@ export default function PersonalBookshelfPage() {
                 </div>
 
                 <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-1">
-                  {searchResults.map((bookItem, idx) => (
-                    <div 
-                      key={idx} 
-                      onClick={() => setSelectedAddBook(bookItem)}
-                      className="bg-background border border-card-border/70 hover:border-sage-medium rounded-xl p-2 flex gap-3 items-center cursor-pointer transition-all duration-200"
-                    >
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img 
-                        src={bookItem.cover_url} 
-                        alt="표지" 
-                        className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
-                      />
-                      <div className="flex-grow min-w-0">
-                        <h4 className="text-[10px] font-black text-foreground truncate">{bookItem.title}</h4>
-                        <span className="text-[9px] text-foreground/45 font-medium truncate leading-none mt-0.5">{bookItem.author}</span>
-                      </div>
-                      <span className="text-[8.5px] font-bold text-sage-medium px-2 py-0.5 bg-sage-light/20 rounded-md">선택</span>
+                  {isSearchLoading ? (
+                    <div className="py-4 flex justify-center items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-sage-medium border-t-transparent rounded-full animate-spin" />
+                      <span className="text-[10px] text-sage-dark font-semibold">책 검색 중...</span>
                     </div>
-                  ))}
+                  ) : searchError ? (
+                    <div className="py-2.5 px-3 text-[10px] text-red-500 font-semibold text-center">
+                      ⚠️ {searchError}
+                    </div>
+                  ) : searchResults.length === 0 && searchQuery.trim() ? (
+                    <div className="py-2.5 px-3 text-[10px] text-foreground/45 font-semibold text-center">
+                      검색 결과가 없어요.
+                    </div>
+                  ) : (
+                    searchResults.map((bookItem, idx) => (
+                      <div 
+                        key={idx} 
+                        onClick={() => setSelectedAddBook(bookItem)}
+                        className="bg-background border border-card-border/70 hover:border-sage-medium rounded-xl p-2 flex gap-3 items-center cursor-pointer transition-all duration-200"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img 
+                          src={bookItem.cover_url || bookItem.coverUrl} 
+                          alt="표지" 
+                          className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
+                        />
+                        <div className="flex-grow min-w-0">
+                          <h4 className="text-[10px] font-black text-foreground truncate">{bookItem.title}</h4>
+                          <span className="text-[9px] text-foreground/45 font-medium truncate leading-none mt-0.5">{bookItem.author}</span>
+                        </div>
+                        <span className="text-[8.5px] font-bold text-sage-medium px-2 py-0.5 bg-sage-light/20 rounded-md">선택</span>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 {/* 찾는 책이 없나요? 직접 등록하기 버튼 */}
@@ -1144,6 +1205,7 @@ export default function PersonalBookshelfPage() {
                       setDirectTitle('');
                       setDirectAuthor('');
                       setDirectCoverUrl('');
+                      setDirectTotalPages('');
                     }}
                     className="text-[9px] text-foreground/40 hover:text-foreground/75 font-bold underline cursor-pointer"
                   >
@@ -1170,6 +1232,17 @@ export default function PersonalBookshelfPage() {
                       value={directAuthor}
                       onChange={(e) => setDirectAuthor(e.target.value)}
                       placeholder="저자명을 입력해 주세요 (선택)"
+                      className="px-2.5 py-1.5 bg-background border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">전체 페이지 수 (선택)</label>
+                    <input 
+                      type="number"
+                      min="1"
+                      value={directTotalPages}
+                      onChange={(e) => setDirectTotalPages(e.target.value === '' ? '' : Number(e.target.value))}
+                      placeholder="예: 300 (선택사항)"
                       className="px-2.5 py-1.5 bg-background border border-card-border rounded-lg text-[10px] font-semibold focus:outline-none focus:border-sage-medium text-foreground w-full"
                     />
                   </div>

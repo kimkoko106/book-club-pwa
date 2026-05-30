@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback, use } from 'react';
 import { useRouter } from 'next/navigation';
 import { mockApi, DiscussionQuestion, DiscussionComment } from '../../../lib/supabase';
 import Navigation from '../../../components/Navigation';
+import SpoilerWarningModal from '../../../components/SpoilerWarningModal';
 import { ArrowLeft, MessageSquare, Send, Calendar, Layers } from 'lucide-react';
 
 interface DiscussionDetailPageProps {
@@ -28,6 +29,7 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
   const [editingContent, setEditingContent] = useState('');
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showSpoilerModal, setShowSpoilerModal] = useState(false);
 
   // URL에서 stage 파라미터 로드
   useEffect(() => {
@@ -167,6 +169,34 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
       setActionError('생각을 삭제하지 못했어요. 잠시 후 다시 시도해주세요.');
     } finally {
       setIsActionLoading(false);
+    }
+  };
+
+  // 책 ID가 확인된 후 스포일러 모달 노출 체크
+  const bookId = question?.book_id;
+  useEffect(() => {
+    if (bookId) {
+      const dismissed = sessionStorage.getItem(`spoil_warn_dismissed_${bookId}`);
+      if (dismissed !== 'true') {
+        setShowSpoilerModal(true);
+      } else {
+        setShowSpoilerModal(false);
+      }
+    }
+  }, [bookId]);
+
+  const handleConfirmSpoiler = (dontShowAgain: boolean) => {
+    if (bookId && dontShowAgain) {
+      sessionStorage.setItem(`spoil_warn_dismissed_${bookId}`, 'true');
+    }
+    setShowSpoilerModal(false);
+  };
+
+  const handleCancelSpoiler = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+    } else {
+      router.push('/');
     }
   };
 
@@ -423,6 +453,13 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
           </div>
         )}
       </main>
+
+      {/* 스포일러 방지 Overlay 모달 */}
+      <SpoilerWarningModal 
+        isOpen={showSpoilerModal} 
+        onConfirm={handleConfirmSpoiler} 
+        onCancel={handleCancelSpoiler} 
+      />
 
       {/* 하단 내비게이션 바 */}
       <Navigation currentUser={currentUser} onLogout={() => {}} />

@@ -4,6 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { mockApi, DiscussionQuestion, isMockMode, supabase } from '../../lib/supabase';
 import Navigation from '../../components/Navigation';
+import SpoilerWarningModal from '../../components/SpoilerWarningModal';
 import { 
   MessageSquare, 
   Heart, 
@@ -67,6 +68,7 @@ export default function DiscussionPage() {
   const [editingFeedbackContent, setEditingFeedbackContent] = useState('');
 
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [showSpoilerModal, setShowSpoilerModal] = useState(false);
 
   // 질문 목록 로드 함수 (상태 업데이트용)
   const loadQuestions = useCallback(async (clubId = activeClubId, bookId = activeBookId) => {
@@ -142,6 +144,33 @@ export default function DiscussionPage() {
       loadQuestions(activeClubId, activeBookId);
     }
   }, [activeClubId, activeBookId, currentUser, loadQuestions]);
+
+  // 3. 책 ID가 정해졌을 때 스포일러 모달 노출 여부 체크
+  useEffect(() => {
+    if (activeBookId) {
+      const dismissed = sessionStorage.getItem(`spoil_warn_dismissed_${activeBookId}`);
+      if (dismissed !== 'true') {
+        setShowSpoilerModal(true);
+      } else {
+        setShowSpoilerModal(false);
+      }
+    }
+  }, [activeBookId]);
+
+  const handleConfirmSpoiler = (dontShowAgain: boolean) => {
+    if (activeBookId && dontShowAgain) {
+      sessionStorage.setItem(`spoil_warn_dismissed_${activeBookId}`, 'true');
+    }
+    setShowSpoilerModal(false);
+  };
+
+  const handleCancelSpoiler = () => {
+    if (typeof window !== 'undefined' && window.history.length > 1) {
+      router.back();
+    } else {
+      router.push('/');
+    }
+  };
 
   // 질문 피드백 열기 핸들러
   const handleOpenFeedback = async (q: DiscussionQuestion, e: React.MouseEvent) => {
@@ -373,7 +402,7 @@ export default function DiscussionPage() {
           <div className="grid grid-cols-2 gap-2">
             {[
               { key: 'reading', label: '📖 읽는 중' },
-              { key: 'question_collecting', label: '⏳ 질문 모으는 중' },
+              { key: 'question_collecting', label: '🌱 이야기 씨앗 고르기' },
               { key: 'discussion', label: '🔥 토론 진행 중' },
               { key: 'archiving', label: '🌙 결산' }
             ].map(item => (
@@ -395,7 +424,7 @@ export default function DiscussionPage() {
             <Info size={11} className="text-sage-dark flex-shrink-0 mt-0.5" />
             <span>
               {discussionStage === 'reading' && '현재는 [조용한 몰입] 독서 단계입니다. 질문이나 대화 보드보다는 멤버들의 독서 진행도 확인과 가이드 독서에 집중합니다.'}
-              {discussionStage === 'question_collecting' && '현재는 [사색 확장] 질문 모집 단계입니다. 이번 달의 우수 질문들을 정제하고 다른 이의 제안에 의견 메모를 덧붙입니다.'}
+              {discussionStage === 'question_collecting' && '현재는 [이야기 씨앗 고르기] 단계입니다. 읽으며 남긴 질문들 중 함께 오래 이야기하고 싶은 주제를 골라봅니다. 🌱'}
               {discussionStage === 'discussion' && '현재는 [활발한 대화] 토론 진행 단계입니다. 최종 선정된 사색 질문이 열려 각자 자유롭게 댓글로 생각을 소통합니다.'}
               {discussionStage === 'archiving' && '현재는 [감정 정리와 회고] 토론 결산 단계입니다. 이번 달의 대화를 통계와 종료 카드로 차분히 매듭짓고 돌아봅니다.'}
             </span>
@@ -408,7 +437,7 @@ export default function DiscussionPage() {
             <span>함께 책 읽는 여정 🗺️</span>
             <span className="text-sage-dark font-black tracking-normal">
               {discussionStage === 'reading' && '천천히 책 속으로 들어가는 시간 🌲'}
-              {discussionStage === 'question_collecting' && '질문이 자라나는 시간 🌱'}
+              {discussionStage === 'question_collecting' && '함께 이야기할 질문을 조용히 골라봅니다. 🌱'}
               {discussionStage === 'discussion' && '생각을 나누는 시간 💬'}
               {discussionStage === 'archiving' && '이번 독서를 마음에 남기는 시간 ✨'}
             </span>
@@ -429,7 +458,7 @@ export default function DiscussionPage() {
 
             {[
               { key: 'reading', label: '책 읽기', emoji: '📖', index: 0 },
-              { key: 'question_collecting', label: '질문 수집', emoji: '🌱', index: 1 },
+              { key: 'question_collecting', label: '이야기 씨앗 고르기', emoji: '🌱', index: 1 },
               { key: 'discussion', label: '생각 나누기', emoji: '💬', index: 2 },
               { key: 'archiving', label: '결산 회고', emoji: '🌙', index: 3 }
             ].map((step, idx) => {
@@ -522,9 +551,95 @@ export default function DiscussionPage() {
           </div>
         )}
 
-        {/* 2단계: 질문 정제 단계 화면 (question_collecting) */}
+        {/* 2단계: 대표 질문 선정 단계 화면 (question_collecting) */}
         {discussionStage === 'question_collecting' && (
-          <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-4">
+            {/* 이번 달 선정 사색 질문 */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2">
+                <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
+                <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
+              </div>
+              <div 
+                onClick={() => setIsPreviewOpen(true)}
+                className="bg-gradient-to-r from-sage-medium to-sage-dark text-white rounded-2xl p-5 shadow-sm cursor-pointer hover:from-sage-dark hover:to-sage-dark transition-all flex justify-between items-center group"
+              >
+                <div className="flex flex-col gap-1">
+                  <h4 className="text-xs font-extrabold flex items-center gap-1.5">
+                    <Sparkles size={13} className="animate-pulse" />
+                    이번 달 선정 질문 {selectedQuestions.length}개 확정
+                  </h4>
+                  <p className="text-[10px] text-white/70">토론 시작 전, 미리 선정된 질문들을 확인해 보세요.</p>
+                </div>
+                <span className="text-[10px] font-bold bg-white/20 px-3 py-1.5 rounded-xl group-hover:bg-white/35 transition-all flex items-center gap-1">
+                  미리보기
+                  <ChevronRight size={11} />
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3단계: 토론 진행 단계 화면 (discussion) */}
+        {discussionStage === 'discussion' && (
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
+              <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
+            </div>
+            {reactionError && (
+              <div className="text-[10px] text-red-500 font-semibold px-1">
+                {reactionError}
+              </div>
+            )}
+            {selectedQuestions.length === 0 ? (
+              <div className="bg-card-bg border border-card-border border-dashed rounded-2xl py-8 text-center text-xs text-foreground/40 font-medium">
+                선정된 질문이 아직 없습니다.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-3.5">
+                {selectedQuestions.map(q => (
+                  <div
+                    key={q.id}
+                    onClick={() => router.push(`/discussion/${q.id}?stage=${discussionStage}`)}
+                    className="bg-sage-light/25 border border-sage-light hover:border-sage-medium rounded-2xl p-5 shadow-sm cursor-pointer transition-all duration-200 flex flex-col gap-3.5 group relative"
+                  >
+                    <div className="absolute top-0 left-0 w-1.5 h-full bg-sage-medium" />
+                    <p className="text-sm font-bold text-foreground leading-snug group-hover:text-sage-dark transition-colors pl-1">
+                      {q.content}
+                    </p>
+                    <div className="flex justify-between items-center text-[10px] text-foreground/50 font-medium pl-1">
+                      <span className="font-bold text-sage-dark">{q.profile?.username} 님의 질문</span>
+                      <span className="flex items-center gap-0.5">대화 댓글 {q.comments_count}개 <ChevronRight size={12} /></span>
+                    </div>
+                    <div className="flex gap-2.5 pt-2.5 border-t border-sage-light/50 pl-1">
+                      <button
+                        onClick={(e) => handleReaction(q.id, 'curious', e)}
+                        disabled={isReactionLoading[q.id]}
+                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
+                      >
+                        <HelpCircle size={12} className="text-sage-medium" />
+                        <span>나도 궁금해요 {q.reaction_curious_count}</span>
+                      </button>
+                      <button
+                        onClick={(e) => handleReaction(q.id, 'talk', e)}
+                        disabled={isReactionLoading[q.id]}
+                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
+                      >
+                        <Heart size={12} className="text-warm-beige" />
+                        <span>이야기하고 싶어요 {q.reaction_talk_count}</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* [공용] 질문 제안하기 및 질문 제안함 (1~3단계 전체 노출, 결산 제외) */}
+        {discussionStage !== 'archiving' && (
+          <div className="flex flex-col gap-5 mt-2">
             <div className="bg-card-bg border border-card-border rounded-2xl p-5 shadow-sm flex flex-col gap-3">
               <h3 className="text-xs font-extrabold text-sage-dark uppercase tracking-wider">궁금한 질문 제안하기</h3>
               <form onSubmit={handleCreateQuestion} className="flex gap-2">
@@ -551,30 +666,6 @@ export default function DiscussionPage() {
                   {questionError}
                 </div>
               )}
-            </div>
-
-            {/* 이번 달 선정 사색 질문 */}
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
-                <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
-              </div>
-              <div 
-                onClick={() => setIsPreviewOpen(true)}
-                className="bg-gradient-to-r from-sage-medium to-sage-dark text-white rounded-2xl p-5 shadow-sm cursor-pointer hover:from-sage-dark hover:to-sage-dark transition-all flex justify-between items-center group"
-              >
-                <div className="flex flex-col gap-1">
-                  <h4 className="text-xs font-extrabold flex items-center gap-1.5">
-                    <Sparkles size={13} className="animate-pulse" />
-                    이번 달 선정 질문 {selectedQuestions.length}개 확정
-                  </h4>
-                  <p className="text-[10px] text-white/70">토론 시작 전, 미리 선정된 질문들을 확인해 보세요.</p>
-                </div>
-                <span className="text-[10px] font-bold bg-white/20 px-3 py-1.5 rounded-xl group-hover:bg-white/35 transition-all flex items-center gap-1">
-                  미리보기
-                  <ChevronRight size={11} />
-                </span>
-              </div>
             </div>
 
             {/* 질문 제안함 */}
@@ -636,63 +727,6 @@ export default function DiscussionPage() {
                 </div>
               )}
             </div>
-          </div>
-        )}
-
-        {/* 3단계: 토론 진행 단계 화면 (discussion) */}
-        {discussionStage === 'discussion' && (
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
-              <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
-            </div>
-            {reactionError && (
-              <div className="text-[10px] text-red-500 font-semibold px-1">
-                {reactionError}
-              </div>
-            )}
-            {selectedQuestions.length === 0 ? (
-              <div className="bg-card-bg border border-card-border border-dashed rounded-2xl py-8 text-center text-xs text-foreground/40 font-medium">
-                선정된 질문이 아직 없습니다.
-              </div>
-            ) : (
-              <div className="flex flex-col gap-3.5">
-                {selectedQuestions.map(q => (
-                  <div
-                    key={q.id}
-                    onClick={() => router.push(`/discussion/${q.id}?stage=${discussionStage}`)}
-                    className="bg-sage-light/25 border border-sage-light hover:border-sage-medium rounded-2xl p-5 shadow-sm cursor-pointer transition-all duration-200 flex flex-col gap-3.5 group relative"
-                  >
-                    <div className="absolute top-0 left-0 w-1.5 h-full bg-sage-medium" />
-                    <p className="text-sm font-bold text-foreground leading-snug group-hover:text-sage-dark transition-colors pl-1">
-                      {q.content}
-                    </p>
-                    <div className="flex justify-between items-center text-[10px] text-foreground/50 font-medium pl-1">
-                      <span className="font-bold text-sage-dark">{q.profile?.username} 님의 질문</span>
-                      <span className="flex items-center gap-0.5">대화 댓글 {q.comments_count}개 <ChevronRight size={12} /></span>
-                    </div>
-                    <div className="flex gap-2.5 pt-2.5 border-t border-sage-light/50 pl-1">
-                      <button
-                        onClick={(e) => handleReaction(q.id, 'curious', e)}
-                        disabled={isReactionLoading[q.id]}
-                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
-                      >
-                        <HelpCircle size={12} className="text-sage-medium" />
-                        <span>나도 궁금해요 {q.reaction_curious_count}</span>
-                      </button>
-                      <button
-                        onClick={(e) => handleReaction(q.id, 'talk', e)}
-                        disabled={isReactionLoading[q.id]}
-                        className="px-3 py-1.5 bg-card-bg hover:bg-sage-light/30 border border-card-border/60 rounded-xl flex items-center gap-1.5 transition-all text-[10px] font-bold text-foreground/60 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed"
-                      >
-                        <Heart size={12} className="text-warm-beige" />
-                        <span>이야기하고 싶어요 {q.reaction_talk_count}</span>
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         )}
 
@@ -958,6 +992,13 @@ export default function DiscussionPage() {
           </div>
         </div>
       )}
+
+      {/* 스포일러 방지 Overlay 모달 */}
+      <SpoilerWarningModal 
+        isOpen={showSpoilerModal} 
+        onConfirm={handleConfirmSpoiler} 
+        onCancel={handleCancelSpoiler} 
+      />
 
       {/* 하단 내비게이션 바 */}
       <Navigation currentUser={currentUser} onLogout={() => {}} />

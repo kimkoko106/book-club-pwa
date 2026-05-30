@@ -464,7 +464,15 @@ export const mockApi = {
       const myClubIds = members.filter(m => m.user_id === userId).map(m => m.club_id);
       return clubs.filter(c => myClubIds.includes(c.id));
     },
-    createClub: async (userId: string, title: string, description: string, bookTitle: string, bookAuthor: string, totalPages: number): Promise<BookClub> => {
+    createClub: async (
+      userId: string, 
+      title: string, 
+      description: string, 
+      bookTitle: string, 
+      bookAuthor: string, 
+      totalPages?: number | null,
+      bookMetadata?: any
+    ): Promise<BookClub> => {
       // 오늘 날짜 및 30일 뒤 날짜 계산 헬퍼
       const today = new Date();
       const after30Days = new Date();
@@ -592,42 +600,20 @@ export const mockApi = {
           console.log('[Debug] group_members insert 성공 (admin 가입 완료)');
 
           // 4. books 테이블 중복 확인 및 삽입
-          console.log('[Debug] 3. books 테이블 중복 체크 시도...');
-          const { data: existingBooks, error: searchError } = await supabase
-            .from('books')
-            .select('id')
-            .eq('title', bookTitle.trim())
-            .eq('author', bookAuthor.trim());
-
-          if (searchError) {
-            console.error('[Debug Error] books select 실패:', searchError);
-            throw new Error(`[Step 3-A: books 조회 실패] Code: ${searchError.code}, Message: ${searchError.message}, Details: ${searchError.details || '없음'}`);
-          }
-
-          let bookId = '';
-          if (existingBooks && existingBooks.length > 0) {
-            bookId = existingBooks[0].id;
-            console.log('[Debug] 기존에 등록된 마스터 도서 발견 - bookId:', bookId);
-          } else {
-            console.log('[Debug] 마스터 도서 미존재, books 테이블 insert 시도...');
-            const { data: newBook, error: insertBookError } = await supabase
-              .from('books')
-              .insert({
-                title: bookTitle.trim(),
-                author: bookAuthor.trim(),
-                total_pages: totalPages,
-                cover_url: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80'
-              })
-              .select('id')
-              .single();
-
-            if (insertBookError) {
-              console.error('[Debug Error] books insert 실패:', insertBookError);
-              throw new Error(`[Step 3-B: books 신규 삽입 실패] Code: ${insertBookError.code}, Message: ${insertBookError.message}, Details: ${insertBookError.details || '없음'}`);
-            }
-            bookId = newBook.id;
-            console.log('[Debug] books 신규 insert 성공 - bookId:', bookId);
-          }
+          console.log('[Debug] 3. findOrCreateBook 호출 시도...');
+          const { id: bookId } = await mockApi.books.findOrCreateBook({
+            title: bookTitle,
+            author: bookAuthor,
+            total_pages: totalPages,
+            cover_url: bookMetadata?.cover_url || bookMetadata?.coverUrl || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80',
+            isbn: bookMetadata?.isbn,
+            isbn13: bookMetadata?.isbn13,
+            source: bookMetadata?.source || 'manual',
+            source_id: bookMetadata?.source_id || bookMetadata?.sourceId,
+            publisher: bookMetadata?.publisher,
+            description: bookMetadata?.description,
+            published_at: bookMetadata?.published_at || bookMetadata?.publishedAt
+          });
 
           // 5. monthly_books 에 연계 등록
           console.log('[Debug] 4. monthly_books 테이블 insert 시도...');
@@ -819,6 +805,7 @@ export const mockApi = {
               )
             `)
             .eq('group_id', clubId)
+            .neq('stage', 'scheduled') // 다음 달 예정된 도서는 현재 도서에서 제외
             .order('created_at', { ascending: false })
             .limit(1);
 
@@ -832,11 +819,16 @@ export const mockApi = {
       }
 
       // 로컬 Mock 모드
+      const stage = localStorage.getItem(`bookclub_mock_club_stage_${clubId}`) || 'reading';
+      if (stage === 'scheduled') {
+        // 예약 상태라면 현재 진행 중인 책이 없음
+        return null;
+      }
+
       const books = getStorageItem<Book>(KEY_BOOKS);
       const matchedBook = books.find(b => b.club_id === clubId) || null;
       if (!matchedBook) return null;
 
-      const stage = localStorage.getItem(`bookclub_mock_club_stage_${clubId}`) || 'reading';
       let dbStage = 'reading';
       if (stage === 'question_collecting') dbStage = 'question';
       else if (stage === 'discussion') dbStage = 'discussion';
@@ -910,8 +902,19 @@ export const mockApi = {
 
             if (insertError) throw insertError;
           }
-        } catch (err) {
-          console.error('[DB] updateMonthlyBook 에러:', err);
+        } catch (err: any) {
+          const errDetails = {
+            function: 'updateMonthlyBook',
+            message: err?.message || 'No message',
+            code: err?.code || 'No code',
+            details: err?.details || 'No details',
+            hint: err?.hint || 'No hint',
+            payload: {
+              clubId,
+              data
+            }
+          };
+          console.error('[DB] updateMonthlyBook error:', errDetails);
           throw err;
         }
         return;
@@ -955,96 +958,195 @@ export const mockApi = {
         title: string; 
         author: string; 
         cover_url?: string; 
-        total_pages: number; 
-      }
+        total_pages?: number | null; 
+        isbn?: string;
+        isbn13?: string;
+        source?: string;
+        source_id?: string;
+        publisher?: string;
+        description?: string;
+        published_at?: string;
+      },
+      targetType: 'current' | 'next' = 'current'
     ): Promise<void> => {
       if (!isMockMode && supabase) {
         try {
-          const { data: existingBooks, error: searchError } = await supabase
-            .from('books')
-            .select('id')
-            .eq('title', bookData.title.trim())
-            .eq('author', bookData.author.trim());
-
-          if (searchError) throw searchError;
-
-          let bookId = '';
-          if (existingBooks && existingBooks.length > 0) {
-            bookId = existingBooks[0].id;
-          } else {
-            const { data: newBook, error: insertBookError } = await supabase
-              .from('books')
-              .insert({
-                title: bookData.title.trim(),
-                author: bookData.author.trim(),
-                cover_url: bookData.cover_url || '',
-                total_pages: bookData.total_pages
-              })
-              .select('id')
-              .single();
-
-            if (insertBookError) throw insertBookError;
-            bookId = newBook.id;
-          }
+          const { id: bookId } = await mockApi.books.findOrCreateBook({
+            title: bookData.title,
+            author: bookData.author,
+            total_pages: bookData.total_pages,
+            cover_url: bookData.cover_url,
+            isbn: bookData.isbn,
+            isbn13: bookData.isbn13,
+            source: bookData.source || 'manual',
+            source_id: bookData.source_id,
+            publisher: bookData.publisher,
+            description: bookData.description,
+            published_at: bookData.published_at
+          });
 
           const today = new Date();
-          const after30Days = new Date();
-          after30Days.setDate(today.getDate() + 30);
           const formatDate = (d: Date) => d.toISOString().split('T')[0];
 
-          const { error: insertMbError } = await supabase
-            .from('monthly_books')
-            .insert({
-              group_id: clubId,
-              book_id: bookId,
-              month: today.toISOString().substring(0, 7),
-              stage: 'reading',
-              timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
-              timeline_question: null,
-              timeline_discussion: null
-            });
+          if (targetType === 'next') {
+            // 다음 달 도서 예약 선정
+            const nextMonthDate = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+            const targetMonth = nextMonthDate.toISOString().substring(0, 7);
 
-          if (insertMbError) throw insertMbError;
+            console.log('[DB] selectNextBook (next month) check for month:', targetMonth);
+            const { data: existingMb, error: selectMbError } = await supabase
+              .from('monthly_books')
+              .select('id, book_id')
+              .eq('group_id', clubId)
+              .eq('month', targetMonth)
+              .maybeSingle();
 
-          const { data: members, error: mError } = await supabase
-            .from('group_members')
-            .select('user_id')
-            .eq('group_id', clubId);
+            if (selectMbError) {
+              console.error('[DB] selectNextBook next month check error:', selectMbError);
+              throw selectMbError;
+            }
 
-          if (mError) throw mError;
+            if (existingMb) {
+              if (existingMb.book_id === bookId) {
+                throw new Error('이미 다음 달 예정 책으로 선정되어 있어요.');
+              }
 
-          if (members && members.length > 0) {
-            for (const m of members) {
-              const { data: exists } = await supabase
-                .from('user_books')
-                .select('id')
-                .eq('user_id', m.user_id)
-                .eq('book_id', bookId)
-                .maybeSingle();
+              console.log('[DB] Updating existing next month book to new selection... mbId:', existingMb.id);
+              const { error: updateMbError } = await supabase
+                .from('monthly_books')
+                .update({
+                  book_id: bookId,
+                  stage: 'scheduled',
+                  timeline_reading: null,
+                  timeline_question: null,
+                  timeline_discussion: null
+                })
+                .eq('id', existingMb.id);
 
-              if (!exists) {
-                await supabase
+              if (updateMbError) throw updateMbError;
+            } else {
+              console.log('[DB] Inserting new next month book selection...');
+              const { error: insertMbError } = await supabase
+                .from('monthly_books')
+                .insert({
+                  group_id: clubId,
+                  book_id: bookId,
+                  month: targetMonth,
+                  stage: 'scheduled',
+                  timeline_reading: null,
+                  timeline_question: null,
+                  timeline_discussion: null
+                });
+
+              if (insertMbError) throw insertMbError;
+            }
+          } else {
+            // 이번 달 공유 도서 즉시 지정
+            const targetMonth = today.toISOString().substring(0, 7);
+            const after30Days = new Date();
+            after30Days.setDate(today.getDate() + 30);
+
+            console.log('[DB] selectNextBook (current month) check for month:', targetMonth);
+            const { data: existingMb, error: selectMbError } = await supabase
+              .from('monthly_books')
+              .select('id, book_id')
+              .eq('group_id', clubId)
+              .eq('month', targetMonth)
+              .maybeSingle();
+
+            if (selectMbError) {
+              console.error('[DB] selectNextBook current month check error:', selectMbError);
+              throw selectMbError;
+            }
+
+            if (existingMb) {
+              if (existingMb.book_id === bookId) {
+                throw new Error('이미 이번 달 공유책이에요.');
+              }
+
+              console.log('[DB] Updating existing monthly book... mbId:', existingMb.id);
+              const { error: updateMbError } = await supabase
+                .from('monthly_books')
+                .update({
+                  book_id: bookId,
+                  stage: 'reading',
+                  timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+                  timeline_question: null,
+                  timeline_discussion: null
+                })
+                .eq('id', existingMb.id);
+
+              if (updateMbError) throw updateMbError;
+            } else {
+              console.log('[DB] Inserting new monthly book...');
+              const { error: insertMbError } = await supabase
+                .from('monthly_books')
+                .insert({
+                  group_id: clubId,
+                  book_id: bookId,
+                  month: targetMonth,
+                  stage: 'reading',
+                  timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+                  timeline_question: null,
+                  timeline_discussion: null
+                });
+
+              if (insertMbError) throw insertMbError;
+            }
+
+            // 이번 달 새로운 공유책으로 교체/선정 시 모임원들의 개인 진척도를 0으로 리셋
+            const { data: members, error: mError } = await supabase
+              .from('group_members')
+              .select('user_id')
+              .eq('group_id', clubId);
+
+            if (mError) throw mError;
+
+            if (members && members.length > 0) {
+              for (const m of members) {
+                const { data: exists } = await supabase
                   .from('user_books')
-                  .insert({
-                    user_id: m.user_id,
-                    book_id: bookId,
-                    status: 'reading',
-                    current_page: 0,
-                    is_recommended: false
-                  });
-              } else {
-                await supabase
-                  .from('user_books')
-                  .update({
-                    status: 'reading',
-                    current_page: 0
-                  })
-                  .eq('id', exists.id);
+                  .select('id')
+                  .eq('user_id', m.user_id)
+                  .eq('book_id', bookId)
+                  .maybeSingle();
+
+                if (!exists) {
+                  await supabase
+                    .from('user_books')
+                    .insert({
+                      user_id: m.user_id,
+                      book_id: bookId,
+                      status: 'reading',
+                      current_page: 0,
+                      is_recommended: false
+                    });
+                } else {
+                  await supabase
+                    .from('user_books')
+                    .update({
+                      status: 'reading',
+                      current_page: 0
+                    })
+                    .eq('id', exists.id);
+                }
               }
             }
           }
-        } catch (err) {
-          console.warn('[DB] selectNextBook 에러:', err);
+        } catch (err: any) {
+          const errDetails = {
+            function: 'selectNextBook',
+            message: err?.message || 'No message',
+            code: err?.code || 'No code',
+            details: err?.details || 'No details',
+            hint: err?.hint || 'No hint',
+            payload: {
+              clubId,
+              bookTitle: bookData.title,
+              targetType
+            }
+          };
+          console.error('[DB] selectNextBook error:', errDetails);
           throw err;
         }
         return;
@@ -1064,8 +1166,15 @@ export const mockApi = {
             club_id: clubId,
             title: bookData.title.trim(),
             author: bookData.author.trim(),
-            total_pages: bookData.total_pages,
+            total_pages: bookData.total_pages || null,
             cover_url: bookData.cover_url || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80',
+            isbn: bookData.isbn || undefined,
+            isbn13: bookData.isbn13 || undefined,
+            source: bookData.source || 'manual',
+            source_id: bookData.source_id || undefined,
+            publisher: bookData.publisher || undefined,
+            description: bookData.description || undefined,
+            published_at: bookData.published_at || undefined,
             created_at: new Date().toISOString()
           };
           booksList.push(matchedBook);
@@ -1124,6 +1233,267 @@ export const mockApi = {
   },
 
   books: {
+    findOrCreateBook: async (bookData: {
+      title: string;
+      author: string;
+      total_pages?: number | null;
+      cover_url?: string | null;
+      isbn?: string | null;
+      isbn13?: string | null;
+      source?: string | null;
+      source_id?: string | null;
+      publisher?: string | null;
+      description?: string | null;
+      published_at?: string | null;
+    }): Promise<{ id: string; total_pages: number | null }> => {
+      const cleanTitle = bookData.title.trim();
+      const cleanAuthor = bookData.author.trim();
+      const totalPages = bookData.total_pages && bookData.total_pages > 0 ? bookData.total_pages : null;
+      const coverUrl = bookData.cover_url || '';
+
+      if (!isMockMode && supabase) {
+        console.log('[DB] findOrCreateBook started. title:', cleanTitle, 'author:', cleanAuthor);
+        try {
+          // 1. isbn13 중복 체크
+          if (bookData.isbn13) {
+            console.log('[DB] findOrCreateBook check by isbn13 starting... value:', bookData.isbn13.trim());
+            try {
+              const { data, error } = await supabase
+                .from('books')
+                .select('id, total_pages')
+                .eq('isbn13', bookData.isbn13.trim());
+              if (error) {
+                console.warn('[DB] findOrCreateBook isbn13 select error:', { message: error.message, code: error.code, details: error.details });
+              }
+              if (!error && data && data.length > 0) {
+                console.log('[DB] Found existing book by isbn13:', data[0].id);
+                return { id: data[0].id, total_pages: data[0].total_pages };
+              }
+            } catch (err) {
+              console.warn('[DB] Failed to query by isbn13 (may be column missing):', err);
+            }
+          }
+
+          // 2. isbn 중복 체크
+          if (bookData.isbn) {
+            console.log('[DB] findOrCreateBook check by isbn starting... value:', bookData.isbn.trim());
+            try {
+              const { data, error } = await supabase
+                .from('books')
+                .select('id, total_pages')
+                .eq('isbn', bookData.isbn.trim());
+              if (error) {
+                console.warn('[DB] findOrCreateBook isbn select error:', { message: error.message, code: error.code, details: error.details });
+              }
+              if (!error && data && data.length > 0) {
+                console.log('[DB] Found existing book by isbn:', data[0].id);
+                return { id: data[0].id, total_pages: data[0].total_pages };
+              }
+            } catch (err) {
+              console.warn('[DB] Failed to query by isbn (may be column missing):', err);
+            }
+          }
+
+          // 3. title + author 중복 체크
+          console.log('[DB] findOrCreateBook check by title + author starting...');
+          const { data, error } = await supabase
+            .from('books')
+            .select('id, total_pages')
+            .eq('title', cleanTitle)
+            .eq('author', cleanAuthor);
+          if (error) {
+            console.warn('[DB] findOrCreateBook title+author select error:', { message: error.message, code: error.code, details: error.details });
+          }
+          if (!error && data && data.length > 0) {
+            console.log('[DB] Found existing book by title + author:', data[0].id);
+            return { id: data[0].id, total_pages: data[0].total_pages };
+          }
+
+          // 4. 새 도서 등록 시도
+          console.log('[DB] findOrCreateBook inserting into books...');
+          try {
+            const insertObj: any = {
+              title: cleanTitle,
+              author: cleanAuthor,
+              total_pages: totalPages,
+              cover_url: coverUrl,
+              isbn: bookData.isbn ? bookData.isbn.trim() : null,
+              isbn13: bookData.isbn13 ? bookData.isbn13.trim() : null,
+              source: bookData.source || 'manual',
+              source_id: bookData.source_id || null,
+              publisher: bookData.publisher || null,
+              description: bookData.description || null,
+              published_at: bookData.published_at || null
+            };
+            const { data: newBook, error: insertError } = await supabase
+              .from('books')
+              .insert(insertObj)
+              .select('id, total_pages')
+              .single();
+
+            if (!insertError && newBook) {
+              console.log('[DB] Inserted new book with metadata:', newBook.id);
+              return { id: newBook.id, total_pages: newBook.total_pages };
+            }
+
+            if (insertError) {
+              console.warn('[DB] Full book insert failed:', {
+                message: insertError.message,
+                code: insertError.code,
+                details: insertError.details,
+                hint: insertError.hint
+              }, 'Retrying with core columns...');
+              
+              // 만약 0 rows returned (PGRST116) 에러라면, select 권한 등으로 결과가 안 왔을 뿐 DB에는 들어갔을 수 있으므로 title+author로 즉시 조회 시도
+              if (insertError.code === 'PGRST116' || insertError.message?.includes('0 rows')) {
+                const { data: recovered, error: recError } = await supabase
+                  .from('books')
+                  .select('id, total_pages')
+                  .eq('title', cleanTitle)
+                  .eq('author', cleanAuthor)
+                  .order('created_at', { ascending: false })
+                  .limit(1);
+                if (!recError && recovered && recovered.length > 0) {
+                  console.log('[DB] Recovered book ID after full insert single check fail:', recovered[0].id);
+                  return { id: recovered[0].id, total_pages: recovered[0].total_pages };
+                }
+              }
+            }
+          } catch (err: any) {
+            console.warn('[DB] Full book insert caught error, retrying with core columns:', err?.message || err);
+          }
+
+          // 5. Core columns fallback insert (total_pages = null)
+          console.log('[DB] findOrCreateBook Core columns fallback inserting (null)...');
+          try {
+            const { data: fallbackBook, error: fallbackError } = await supabase
+              .from('books')
+              .insert({
+                title: cleanTitle,
+                author: cleanAuthor,
+                total_pages: totalPages, // null일 수 있음
+                cover_url: coverUrl
+              })
+              .select('id, total_pages')
+              .single();
+
+            if (!fallbackError && fallbackBook) {
+              console.log('[DB] Fallback book inserted successfully:', fallbackBook.id);
+              return { id: fallbackBook.id, total_pages: fallbackBook.total_pages };
+            }
+
+            if (fallbackError) {
+              console.warn('[DB] Fallback insert failed:', {
+                message: fallbackError.message,
+                code: fallbackError.code,
+                details: fallbackError.details
+              });
+              
+              // 만약 0 rows returned (PGRST116) 에러 복구
+              if (fallbackError.code === 'PGRST116') {
+                const { data: recovered, error: recError } = await supabase
+                  .from('books')
+                  .select('id, total_pages')
+                  .eq('title', cleanTitle)
+                  .eq('author', cleanAuthor)
+                  .order('created_at', { ascending: false })
+                  .limit(1);
+                if (!recError && recovered && recovered.length > 0) {
+                  console.log('[DB] Recovered book ID after fallback insert single check fail:', recovered[0].id);
+                  return { id: recovered[0].id, total_pages: recovered[0].total_pages };
+                }
+              }
+              
+              // 만약 NOT NULL 제약조건 위반(23502)이고 totalPages가 null인 경우라면, 최후의 수단으로 total_pages = 1로 재시도
+              if (fallbackError.code === '23502' && totalPages === null) {
+                console.log('[DB] Fallback to total_pages = 1 due to DB NOT NULL constraint...');
+                const { data: fallbackBook2, error: fallbackError2 } = await supabase
+                  .from('books')
+                  .insert({
+                    title: cleanTitle,
+                    author: cleanAuthor,
+                    total_pages: 1, // DB 제약조건을 만족하기 위해 1 채움 (원격 DB 미변경 대비)
+                    cover_url: coverUrl
+                  })
+                  .select('id, total_pages')
+                  .single();
+
+                if (!fallbackError2 && fallbackBook2) {
+                  console.log('[DB] Fallback with total_pages=1 inserted successfully:', fallbackBook2.id);
+                  return { id: fallbackBook2.id, total_pages: fallbackBook2.total_pages };
+                }
+                
+                if (fallbackError2) {
+                  throw fallbackError2;
+                }
+              } else {
+                throw fallbackError;
+              }
+            }
+          } catch (err: any) {
+            console.error('[DB] Fallback insert caught exception:', err?.message || err);
+            throw err;
+          }
+
+        } catch (err: any) {
+          const errorDetails = {
+            message: err?.message || 'No message',
+            code: err?.code || 'No code',
+            details: err?.details || 'No details',
+            hint: err?.hint || 'No hint',
+            stack: err?.stack || 'No stack',
+            raw: err
+          };
+          console.error('[DB] findOrCreateBook critical error:', errorDetails);
+          const richError = new Error(`[findOrCreateBook] ${errorDetails.message} (Code: ${errorDetails.code}, Details: ${errorDetails.details})`);
+          (richError as any).code = errorDetails.code;
+          (richError as any).details = errorDetails.details;
+          (richError as any).hint = errorDetails.hint;
+          throw richError;
+        }
+      }
+
+      // Mock Mode
+      const books = getStorageItem<Book>(KEY_BOOKS) as any[];
+      let matchedBook = null;
+
+      if (bookData.isbn13) {
+        matchedBook = books.find(b => b.isbn13 && b.isbn13 === bookData.isbn13);
+      }
+      if (!matchedBook && bookData.isbn) {
+        matchedBook = books.find(b => b.isbn && b.isbn === bookData.isbn);
+      }
+      if (!matchedBook) {
+        matchedBook = books.find(b => 
+          b.title.trim().toLowerCase() === cleanTitle.toLowerCase() && 
+          b.author.trim().toLowerCase() === cleanAuthor.toLowerCase()
+        );
+      }
+
+      if (matchedBook) {
+        return { id: matchedBook.id, total_pages: matchedBook.total_pages || null };
+      }
+
+      const newBook: any = {
+        id: 'book-' + Date.now(),
+        title: cleanTitle,
+        author: cleanAuthor,
+        total_pages: totalPages,
+        cover_url: coverUrl || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80',
+        isbn: bookData.isbn || undefined,
+        isbn13: bookData.isbn13 || undefined,
+        source: bookData.source || 'manual',
+        source_id: bookData.source_id || undefined,
+        publisher: bookData.publisher || undefined,
+        description: bookData.description || undefined,
+        published_at: bookData.published_at || undefined,
+        created_at: new Date().toISOString()
+      };
+      books.push(newBook);
+      setStorageItem(KEY_BOOKS, books);
+      return { id: newBook.id, total_pages: newBook.total_pages };
+    },
+
     getByClub: async (clubId: string): Promise<Book | null> => {
       if (!isMockMode && supabase) {
         try {
@@ -1207,16 +1577,18 @@ export const mockApi = {
             if (ub.status === 'completed') uiStatus = 'completed';
             else if (ub.status === 'wished' || ub.status === 'wish' || ub.status === 'want_to_read') uiStatus = 'wish';
 
-            const bookInfo = ub.books || { title: '제목 없음', author: '저자 미상', cover_url: '', total_pages: 100 };
-            const progressPercent = bookInfo.total_pages > 0
+            const bookInfo = ub.books || { title: '제목 없음', author: '저자 미상', cover_url: '', total_pages: null };
+            const hasTotalPages = bookInfo.total_pages !== undefined && bookInfo.total_pages !== null && bookInfo.total_pages > 0;
+            const progressPercent = hasTotalPages
               ? Math.round((ub.current_page / bookInfo.total_pages) * 100)
-              : 0;
+              : ub.current_page;
 
             return {
               id: ub.id,
               title: bookInfo.title,
               author: bookInfo.author,
               cover_url: bookInfo.cover_url || '',
+              total_pages: bookInfo.total_pages || null,
               status: uiStatus,
               progress: uiStatus === 'reading' ? Math.min(100, Math.max(0, progressPercent)) : undefined,
               is_recommended: ub.is_recommended,
@@ -1246,50 +1618,57 @@ export const mockApi = {
 
     addBookToShelf: async (
       userId: string, 
-      bookData: { title: string; author: string; cover_url?: string; status: 'reading' | 'completed' | 'wish'; progress: number }
+      bookData: { 
+        title: string; 
+        author: string; 
+        cover_url?: string; 
+        status: 'reading' | 'completed' | 'wish'; 
+        progress: number;
+        total_pages?: number | null;
+        isbn?: string | null;
+        isbn13?: string | null;
+        source?: string | null;
+        source_id?: string | null;
+        publisher?: string | null;
+        description?: string | null;
+        published_at?: string | null;
+      }
     ): Promise<any> => {
       if (!isMockMode && supabase) {
         try {
-          const { data: existingBooks, error: searchError } = await supabase
-            .from('books')
-            .select('id, total_pages')
-            .eq('title', bookData.title.trim())
-            .eq('author', bookData.author.trim());
+          const { id: bookId, total_pages: dbTotalPages } = await mockApi.books.findOrCreateBook({
+            title: bookData.title,
+            author: bookData.author,
+            total_pages: bookData.total_pages,
+            cover_url: bookData.cover_url,
+            isbn: bookData.isbn,
+            isbn13: bookData.isbn13,
+            source: bookData.source || 'manual',
+            source_id: bookData.source_id,
+            publisher: bookData.publisher,
+            description: bookData.description,
+            published_at: bookData.published_at
+          });
 
-          if (searchError) throw searchError;
-
-          let bookId = '';
-          let totalPages = 300;
-
-          if (existingBooks && existingBooks.length > 0) {
-            bookId = existingBooks[0].id;
-            totalPages = existingBooks[0].total_pages;
-          } else {
-            const { data: newBook, error: insertBookError } = await supabase
-              .from('books')
-              .insert({
-                title: bookData.title.trim(),
-                author: bookData.author.trim(),
-                cover_url: bookData.cover_url || '',
-                total_pages: totalPages
-              })
-              .select('id, total_pages')
-              .single();
-
-            if (insertBookError) throw insertBookError;
-            bookId = newBook.id;
-            totalPages = newBook.total_pages;
-          }
-
+          console.log('[DB] addBookToShelf starting check user_book... userId:', userId, 'bookId:', bookId);
           const { data: userBookExists, error: checkUserBookError } = await supabase
             .from('user_books')
             .select('id')
             .eq('user_id', userId)
             .eq('book_id', bookId);
 
-          if (checkUserBookError) throw checkUserBookError;
+          if (checkUserBookError) {
+            console.error('[DB] addBookToShelf duplicate check query failed:', {
+              message: checkUserBookError.message,
+              code: checkUserBookError.code,
+              details: checkUserBookError.details,
+              hint: checkUserBookError.hint
+            });
+            throw checkUserBookError;
+          }
 
           if (userBookExists && userBookExists.length > 0) {
+            console.log('[DB] Book already exists in user bookshelf:', bookId);
             throw new Error('이미 내 책장에 담긴 책이에요.');
           }
 
@@ -1297,13 +1676,17 @@ export const mockApi = {
           if (bookData.status === 'completed') dbStatus = 'completed';
           else if (bookData.status === 'wish') dbStatus = 'wished';
 
+          const hasTotalPages = dbTotalPages !== undefined && dbTotalPages !== null && dbTotalPages > 0;
           let currentPage = 0;
           if (dbStatus === 'completed') {
-            currentPage = totalPages;
+            currentPage = hasTotalPages ? dbTotalPages : 100;
           } else if (dbStatus === 'reading') {
-            currentPage = Math.round((bookData.progress / 100) * totalPages);
+            currentPage = hasTotalPages 
+              ? Math.round((bookData.progress / 100) * dbTotalPages)
+              : bookData.progress;
           }
 
+          console.log('[DB] addBookToShelf inserting into user_books... status:', dbStatus, 'currentPage:', currentPage);
           const { data: newUserBook, error: insertUserBookError } = await supabase
             .from('user_books')
             .insert({
@@ -1316,11 +1699,45 @@ export const mockApi = {
             .select('id')
             .single();
 
-          if (insertUserBookError) throw insertUserBookError;
+          if (insertUserBookError) {
+            console.error('[DB] addBookToShelf insert into user_books failed:', {
+              message: insertUserBookError.message,
+              code: insertUserBookError.code,
+              details: insertUserBookError.details,
+              hint: insertUserBookError.hint
+            });
+            
+            // PGRST116 (0 rows returned) 에러인 경우 select 권한 차단으로 안 들어온 것이므로 강제 복구 조회 시도
+            if (insertUserBookError.code === 'PGRST116') {
+              const { data: recovered, error: recError } = await supabase
+                .from('user_books')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('book_id', bookId);
+              if (!recError && recovered && recovered.length > 0) {
+                console.log('[DB] Recovered user_book ID after insert single check fail:', recovered[0].id);
+                return { id: recovered[0].id };
+              }
+            }
+            throw insertUserBookError;
+          }
+          console.log('[DB] Book added to user library successfully. user_books entry id:', newUserBook?.id);
           return newUserBook;
-        } catch (err) {
-          console.error('Error adding book to shelf in Supabase:', err);
-          throw err;
+        } catch (err: any) {
+          const errorDetails = {
+            message: err?.message || 'No message',
+            code: err?.code || 'No code',
+            details: err?.details || 'No details',
+            hint: err?.hint || 'No hint',
+            stack: err?.stack || 'No stack',
+            raw: err
+          };
+          console.error('[DB] addBookToShelf insert failed:', errorDetails);
+          const richError = new Error(`[addBookToShelf] ${errorDetails.message} (Code: ${errorDetails.code}, Details: ${errorDetails.details})`);
+          (richError as any).code = errorDetails.code;
+          (richError as any).details = errorDetails.details;
+          (richError as any).hint = errorDetails.hint;
+          throw richError;
         }
       }
 
@@ -1382,7 +1799,8 @@ export const mockApi = {
           if (!userBook) throw new Error('책을 찾을 수 없습니다.');
 
           const bookId = userBook.book_id;
-          const totalPages = (userBook.books as any)?.total_pages || 300;
+          const totalPages = (userBook.books as any)?.total_pages;
+          const hasTotalPages = totalPages !== undefined && totalPages !== null && totalPages > 0;
 
           let dbStatus: 'reading' | 'completed' | 'wished' = 'reading';
           if (updateData.status === 'completed') dbStatus = 'completed';
@@ -1390,9 +1808,11 @@ export const mockApi = {
 
           let currentPage = 0;
           if (dbStatus === 'completed') {
-            currentPage = totalPages;
+            currentPage = hasTotalPages ? totalPages : 100;
           } else if (dbStatus === 'reading') {
-            currentPage = Math.round((updateData.progress / 100) * totalPages);
+            currentPage = hasTotalPages 
+              ? Math.round((updateData.progress / 100) * totalPages)
+              : updateData.progress;
           }
 
           const { error: updateUserBookError } = await supabase
@@ -1778,10 +2198,139 @@ export const mockApi = {
       });
     },
     updateMyProgress: async (userId: string, bookId: string, currentPage: number, status: 'reading' | 'completed' | 'paused'): Promise<UserBookProgress> => {
+      const now = new Date().toISOString();
+
+      if (!isMockMode && supabase) {
+        console.log('[DB] updateMyProgress start. userId:', userId, 'bookId:', bookId, 'currentPage:', currentPage, 'status:', status);
+        try {
+          // 1. user_books 에 이미 매핑된 기록이 존재하는지 조회
+          const { data: existing, error: findError } = await supabase
+            .from('user_books')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('book_id', bookId)
+            .maybeSingle();
+
+          if (findError) {
+            console.error('[DB] updateMyProgress find existing error:', findError);
+            throw findError;
+          }
+
+          let dbStatus: 'reading' | 'completed' | 'wished' = 'reading';
+          if (status === 'completed') dbStatus = 'completed';
+          else if (status === 'paused') dbStatus = 'wished';
+
+          let userBookId = '';
+
+          if (existing) {
+            userBookId = existing.id;
+            console.log('[DB] updateMyProgress updating existing record. id:', userBookId);
+            const { error: updateError } = await supabase
+              .from('user_books')
+              .update({
+                current_page: currentPage,
+                status: dbStatus,
+                updated_at: now
+              })
+              .eq('id', existing.id);
+
+            if (updateError) {
+              console.error('[DB] updateMyProgress update failed:', updateError);
+              throw updateError;
+            }
+          } else {
+            console.log('[DB] updateMyProgress inserting new record...');
+            try {
+              const { data: inserted, error: insertError } = await supabase
+                .from('user_books')
+                .insert({
+                  user_id: userId,
+                  book_id: bookId,
+                  current_page: currentPage,
+                  status: dbStatus,
+                  is_recommended: false
+                })
+                .select('id')
+                .single();
+
+              if (insertError) {
+                console.warn('[DB] updateMyProgress insert failed. Attempting select recovery...', insertError);
+                
+                // PGRST116 (0 rows returned) 또는 중복 키 에러 발생 시 재조회 복구 시도
+                if (insertError.code === 'PGRST116' || insertError.code === '23505' || insertError.message?.includes('0 rows')) {
+                  const { data: recovered, error: recError } = await supabase
+                    .from('user_books')
+                    .select('id')
+                    .eq('user_id', userId)
+                    .eq('book_id', bookId);
+                  
+                  if (!recError && recovered && recovered.length > 0) {
+                    console.log('[DB] updateMyProgress recovered user_book ID:', recovered[0].id);
+                    userBookId = recovered[0].id;
+                  } else {
+                    throw insertError;
+                  }
+                } else {
+                  throw insertError;
+                }
+              } else if (inserted) {
+                userBookId = inserted.id;
+              }
+            } catch (innerErr: any) {
+              // 2차 수동 select fallback (완전 수동 재조회)
+              console.warn('[DB] updateMyProgress insert inner error. Retrying fallback query...', innerErr);
+              const { data: recovered, error: recError } = await supabase
+                .from('user_books')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('book_id', bookId);
+              
+              if (!recError && recovered && recovered.length > 0) {
+                console.log('[DB] updateMyProgress secondary recovery succeeded. ID:', recovered[0].id);
+                userBookId = recovered[0].id;
+                
+                // 조회된 ID가 있으면 업데이트 한 번 더 실행해 주기 (동작 안전성 보장)
+                await supabase
+                  .from('user_books')
+                  .update({
+                    current_page: currentPage,
+                    status: dbStatus,
+                    updated_at: now
+                  })
+                  .eq('id', userBookId);
+              } else {
+                throw innerErr;
+              }
+            }
+          }
+
+          console.log('[DB] updateMyProgress successfully finished. userBookId:', userBookId);
+          return {
+            id: userBookId,
+            user_id: userId,
+            book_id: bookId,
+            current_page: currentPage,
+            status,
+            updated_at: now
+          } as UserBookProgress;
+
+        } catch (err: any) {
+          const errDetails = {
+            message: err?.message || 'No message',
+            code: err?.code || 'No code',
+            details: err?.details || 'No details',
+            hint: err?.hint || 'No hint',
+            stack: err?.stack || 'No stack'
+          };
+          console.error('[DB] updateMyProgress critical error:', errDetails);
+          throw new Error(`[updateMyProgress] ${errDetails.message} (Code: ${errDetails.code})`);
+        }
+      }
+
+      // 로컬 Mock 모드 대응
       const progresses = getStorageItem<UserBookProgress>(KEY_PROGRESS);
       const index = progresses.findIndex(p => p.user_id === userId && p.book_id === bookId);
       
-      const now = new Date().toISOString();
       let updatedProgress: UserBookProgress;
 
       if (index > -1) {
@@ -2471,6 +3020,7 @@ export const mockApi = {
               )
             `)
             .eq('group_id', clubId)
+            .in('stage', ['recap', 'archived']) // 결산(recap)이 시작되었거나 아카이브가 완료된 도서만 아카이브에 표시
             .order('created_at', { ascending: false });
 
           if (error) throw error;
@@ -2514,7 +3064,8 @@ export const mockApi = {
               author: '양귀자',
               coverUrl: 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=150&auto=format&fit=crop&q=80',
               atmosphere: '“관계와 현실의 선택에 대해 오래 대화 나누었던 달”',
-              tags: ['선택과책임', '삶의이면']
+              tags: ['선택과책임', '삶의이면'],
+              stage: 'archived'
             },
             {
               id: 'report-3',
@@ -2524,13 +3075,18 @@ export const mockApi = {
               author: '손원평',
               coverUrl: 'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=150&auto=format&fit=crop&q=80',
               atmosphere: '“감정과 진정한 공감의 온기를 함께 나누었던 시간”',
-              tags: ['공감의온기', '타인의아픔']
+              tags: ['공감의온기', '타인의아픔'],
+              stage: 'archived'
             }
           ];
           localStorage.setItem(KEY_MONTHLY_BOOKS, JSON.stringify(defaultList));
           return defaultList;
         }
-        return list;
+        
+        // Mock 모드에서도 진행 중인 책('reading', 'question', 'discussion', 'scheduled')은 제외
+        return list.filter((item: any) => 
+          !item.stage || ['recap', 'archived'].includes(item.stage)
+        );
       } catch (err) {
         console.warn('Mock archive load error:', err);
         return [];

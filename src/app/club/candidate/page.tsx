@@ -112,10 +112,16 @@ export default function NextBookCandidatePage() {
 
   // 모달 입력 상태
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState(DUMMY_SEARCH_BOOKS);
-  const [selectedBook, setSelectedBook] = useState<typeof DUMMY_SEARCH_BOOKS[0] | null>(null);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearchLoading, setIsSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [selectedBook, setSelectedBook] = useState<any | null>(null);
   const [recommendType, setRecommendType] = useState<'read' | 'wish'>('read');
   const [reasonInput, setReasonInput] = useState('');
+  
+  // 도서 선정 시의 상태
+  const [selectErrorMsg, setSelectErrorMsg] = useState<string | null>(null);
+  const [isSelecting, setIsSelecting] = useState(false);
 
   // 1. 초기화 및 로드
   useEffect(() => {
@@ -148,19 +154,35 @@ export default function NextBookCandidatePage() {
     init();
   }, []);
 
-  // 2. 도서 실시간 검색
+  // 2. 도서 실시간 검색 (Debounced)
   const handleSearchBook = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    setSearchQuery(val);
-    if (!val.trim()) {
-      setSearchResults(DUMMY_SEARCH_BOOKS);
-    } else {
-      setSearchResults(DUMMY_SEARCH_BOOKS.filter(b => 
-        b.title.toLowerCase().includes(val.toLowerCase()) || 
-        b.author.toLowerCase().includes(val.toLowerCase())
-      ));
-    }
+    setSearchQuery(e.target.value);
   };
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setIsSearchLoading(true);
+      setSearchError(null);
+      try {
+        const res = await fetch(`/api/books/search?query=${encodeURIComponent(searchQuery)}`);
+        if (!res.ok) throw new Error('API 호출 실패');
+        const data = await res.json();
+        setSearchResults(data.items || []);
+      } catch (err) {
+        console.warn('책 검색 실패:', err);
+        setSearchError('책 검색을 불러오지 못했어요...');
+      } finally {
+        setIsSearchLoading(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // 3. 도서 추천 등록
   const handleAddRecommendation = (e: React.FormEvent) => {
@@ -178,14 +200,22 @@ export default function NextBookCandidatePage() {
       id: `cand-${Date.now()}`,
       title: selectedBook.title,
       author: selectedBook.author,
-      cover_url: selectedBook.cover_url,
-      total_pages: selectedBook.total_pages,
+      cover_url: selectedBook.cover_url || selectedBook.coverUrl || '',
+      total_pages: selectedBook.total_pages || selectedBook.totalPages || null,
       recommended_by: currentUser?.username || '익명',
       type: recommendType,
       reason: reasonInput.trim(),
       reactions: { curious: 0, with_you: 0 },
-      created_at: new Date().toISOString()
-    };
+      created_at: new Date().toISOString(),
+      // 네이버 책 검색 메타데이터 보존
+      isbn: selectedBook.isbn,
+      isbn13: selectedBook.isbn13,
+      source: selectedBook.source || 'aladin',
+      source_id: selectedBook.source_id || selectedBook.sourceId,
+      publisher: selectedBook.publisher,
+      description: selectedBook.description,
+      published_at: selectedBook.published_at || selectedBook.publishedAt
+    } as any;
 
     const updated = [newCandidate, ...candidates];
     setCandidates(updated);
@@ -218,23 +248,73 @@ export default function NextBookCandidatePage() {
   };
 
   // 5. 방장 흐름: 다음 공유책으로 선택 (Supabase / 로컬 Mock API 누적 생성으로 실연동)
-  const handleSelectAsNextBook = async (cand: CandidateBook) => {
-    const confirmChoice = confirm(`[${cand.title}] 도서를 이번 달 독서모임 공유도서로 선정하시겠습니까?\n진행도가 0페이지로 초기화됩니다.`);
-    if (!confirmChoice) return;
+  const handleSelectAsNextBook = async (cand: CandidateBook, targetType: 'current' | 'next' = 'current') => {
+    setSelectErrorMsg(null);
+
+    if (targetType === 'current') {
+      // 정책 2: 결산 전 공유책 교체 경고 확인 절차
+      try {
+        setIsSelecting(true);
+        const currentBookEntry = await mockApi.clubs.getMonthlyBook(activeClubId);
+        
+        // 현재 공유책이 존재하고, 아직 결산(recap/archived)되지 않은 경우 경고창 노출
+        if (currentBookEntry && currentBookEntry.stage !== 'recap' && currentBookEntry.stage !== 'archived') {
+          setIsSelecting(false); // confirm 창 노출 동안 loading을 끔
+          const confirmChoice = confirm(
+            `현재 진행 중인 공유책이 아직 결산되지 않았습니다.\n새 책으로 교체하면 현재 책은 지난 이야기에 보관되지 않습니다.\n\n그래도 교체하시겠어요?`
+          );
+          if (!confirmChoice) return;
+          setIsSelecting(true);
+        } else {
+          // 결산이 이미 완료되었거나 없는 경우 일반 확인창 노출
+          setIsSelecting(false);
+          const confirmChoice = confirm(`[${cand.title}] 도서를 이번 달 독서모임 공유도서로 선정하시겠습니까?\n진행도가 0페이지로 초기화됩니다.`);
+          if (!confirmChoice) return;
+          setIsSelecting(true);
+        }
+      } catch (err) {
+        console.warn('현재 도서 상태 조회 실패:', err);
+      }
+    } else {
+      // 다음 달 예정 도서 선정 확인창
+      const confirmChoice = confirm(`[${cand.title}] 도서를 다음 달 예정 도서로 선정하시겠습니까?`);
+      if (!confirmChoice) return;
+      setIsSelecting(true);
+    }
 
     try {
       await mockApi.clubs.selectNextBook(activeClubId, {
         title: cand.title,
         author: cand.author,
         cover_url: cand.cover_url,
-        total_pages: cand.total_pages
-      });
+        total_pages: cand.total_pages,
+        isbn: (cand as any).isbn,
+        isbn13: (cand as any).isbn13,
+        source: (cand as any).source,
+        source_id: (cand as any).source_id,
+        publisher: (cand as any).publisher,
+        description: (cand as any).description,
+        published_at: (cand as any).published_at
+      }, targetType);
 
-      alert(`축하합니다! 이번 달 공유 도서가 [${cand.title}]로 공식 선정되었으며, 독서 단계가 1단계(몰입)로 리셋되었습니다.`);
+      if (targetType === 'next') {
+        alert(`[${cand.title}] 도서가 다음 달 예정 책으로 선정되었어요. 🌱`);
+      } else {
+        alert(`[${cand.title}] 도서가 이번 달 공유책으로 선정되었어요. ✨`);
+      }
       router.push('/club');
-    } catch (err) {
+    } catch (err: any) {
       console.warn('[Candidate] 도서 선정 에러:', err);
-      alert('도서 선정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      let errMsg = '도서 선정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
+      if (err.message?.includes('이미 이번 달 공유책이에요')) {
+        errMsg = '이미 이번 달 공유책이에요.';
+      } else if (err.message?.includes('이미 다음 달 예정 책이에요')) {
+        errMsg = '이미 다음 달 예정 책이에요.';
+      }
+      setSelectErrorMsg(errMsg);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } finally {
+      setIsSelecting(false);
     }
   };
 
@@ -262,6 +342,13 @@ export default function NextBookCandidatePage() {
           <Sparkles size={13} className="animate-pulse" />
         </div>
       </header>
+
+      {selectErrorMsg && (
+        <div className="mx-4.5 mt-3 bg-red-500/10 border border-red-500/30 text-red-500 text-[10.5px] font-bold py-2.5 px-3 rounded-xl flex items-center justify-between animate-fade-in z-20">
+          <span>⚠️ {selectErrorMsg}</span>
+          <button onClick={() => setSelectErrorMsg(null)} className="text-[9px] underline cursor-pointer">닫기</button>
+        </div>
+      )}
 
       {/* 2. 상단 분위기 영역 */}
       <div className="px-4.5 pt-5 pb-4 flex flex-col gap-1.5 text-center">
@@ -426,12 +513,22 @@ export default function NextBookCandidatePage() {
 
                 {/* 방장 권한 시 최종 선정 버튼 노출 */}
                 {userRole === 'admin' && (
-                  <button
-                    onClick={() => handleSelectAsNextBook(cand)}
-                    className="px-2.5 py-1.5 border border-sage-medium text-sage-dark hover:bg-sage-medium hover:text-white rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
-                  >
-                    다음 공유책으로 선정
-                  </button>
+                  <div className="flex gap-1.5 flex-wrap">
+                    <button
+                      onClick={() => handleSelectAsNextBook(cand, 'current')}
+                      disabled={isSelecting}
+                      className="px-2.5 py-1.5 border border-sage-medium text-sage-dark hover:bg-sage-medium hover:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
+                    >
+                      {isSelecting ? '선정 중...' : '이번 달 공유책 선정'}
+                    </button>
+                    <button
+                      onClick={() => handleSelectAsNextBook(cand, 'next')}
+                      disabled={isSelecting}
+                      className="px-2.5 py-1.5 border border-sage-dark/60 text-sage-dark/85 hover:bg-sage-dark/80 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
+                    >
+                      {isSelecting ? '선정 중...' : '다음 달 예정책 선정'}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -484,32 +581,47 @@ export default function NextBookCandidatePage() {
                 </div>
 
                 <div className="flex flex-col gap-2 max-h-48 overflow-y-auto pr-1">
-                  {searchResults.map((bookItem, idx) => (
-                    <div 
-                      key={idx} 
-                      onClick={() => setSelectedBook(bookItem)}
-                      className="bg-background border border-card-border/70 hover:border-sage-medium rounded-xl p-2 flex gap-3 items-center cursor-pointer transition-all duration-200"
-                    >
-                      {bookItem.cover_url ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img 
-                          src={bookItem.cover_url} 
-                          alt="표지" 
-                          className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
-                        />
-                      ) : (
-                        <div className="w-7 h-10 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[9px] select-none flex-shrink-0 relative overflow-hidden">
-                          <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
-                          {bookItem.title.charAt(0)}
-                        </div>
-                      )}
-                      <div className="flex-grow min-w-0">
-                        <h4 className="text-[10px] font-black text-foreground truncate">{bookItem.title}</h4>
-                        <span className="text-[9px] text-foreground/45 font-medium truncate leading-none mt-0.5">{bookItem.author}</span>
-                      </div>
-                      <span className="text-[8.5px] font-bold text-sage-medium px-2 py-0.5 bg-sage-light/20 rounded-md">선택</span>
+                  {isSearchLoading ? (
+                    <div className="py-4 flex justify-center items-center gap-2">
+                      <div className="w-4 h-4 border-2 border-sage-medium border-t-transparent rounded-full animate-spin" />
+                      <span className="text-[10px] text-sage-dark font-semibold">책 검색 중...</span>
                     </div>
-                  ))}
+                  ) : searchError ? (
+                    <div className="py-2.5 px-3 text-[10px] text-red-500 font-semibold text-center">
+                      ⚠️ {searchError}
+                    </div>
+                  ) : searchResults.length === 0 && searchQuery.trim() ? (
+                    <div className="py-2.5 px-3 text-[10px] text-foreground/45 font-semibold text-center">
+                      검색 결과가 없어요.
+                    </div>
+                  ) : (
+                    searchResults.map((bookItem, idx) => (
+                      <div 
+                        key={idx} 
+                        onClick={() => setSelectedBook(bookItem)}
+                        className="bg-background border border-card-border/70 hover:border-sage-medium rounded-xl p-2 flex gap-3 items-center cursor-pointer transition-all duration-200"
+                      >
+                        {bookItem.cover_url || bookItem.coverUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img 
+                            src={bookItem.cover_url || bookItem.coverUrl} 
+                            alt="표지" 
+                            className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-7 h-10 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border flex justify-center items-center text-sage-dark font-black text-[9px] select-none flex-shrink-0 relative overflow-hidden">
+                            <div className="absolute top-0 left-0 w-0.5 h-full bg-sage-dark/10" />
+                            {bookItem.title.charAt(0)}
+                          </div>
+                        )}
+                        <div className="flex-grow min-w-0">
+                          <h4 className="text-[10px] font-black text-foreground truncate">{bookItem.title}</h4>
+                          <span className="text-[9px] text-foreground/45 font-medium truncate leading-none mt-0.5">{bookItem.author}</span>
+                        </div>
+                        <span className="text-[8.5px] font-bold text-sage-medium px-2 py-0.5 bg-sage-light/20 rounded-md">선택</span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             ) : (

@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { mockApi, isMockMode, supabase, checkIsCompleted, clearSessionCache } from '../lib/supabase';
 import { BookClub, Book, UserBookProgress } from '../types';
 import BookProgressCard from '../components/BookProgressCard';
-import MemberList from '../components/MemberList';
 import Navigation from '../components/Navigation';
 import { BookOpen, Compass, Plus, Sparkles, LogOut, ArrowRight, MessageSquare } from 'lucide-react';
 
@@ -22,6 +21,24 @@ export default function HomePage() {
   const [showTimeoutFallback, setShowTimeoutFallback] = useState(false);
   const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('reading');
   const router = useRouter();
+
+  // 함께 읽는 모임원 전체의 평균 진행률 계산
+  const getAverageProgress = () => {
+    if (membersProgress.length === 0) return 0;
+    
+    let totalPercent = 0;
+    membersProgress.forEach((p) => {
+      const totalPages = activeBook?.total_pages;
+      const hasPages = totalPages !== undefined && totalPages !== null && totalPages > 1;
+      const pct = hasPages 
+        ? Math.round((p.current_page / (totalPages as number)) * 100)
+        : p.current_page;
+      totalPercent += Math.min(100, Math.max(0, pct));
+    });
+    return Math.round(totalPercent / membersProgress.length);
+  };
+
+  const avgProgress = getAverageProgress();
 
   // 5초 로딩 타임아웃 가드 및 자동 리다이렉트
   useEffect(() => {
@@ -175,6 +192,42 @@ export default function HomePage() {
     }
   };
 
+  const handleUpdateTotalPages = async (totalPages: number) => {
+    if (!currentUser || !activeBook || !activeClub) return;
+
+    try {
+      if (!isMockMode && supabase) {
+        const { error } = await supabase
+          .from('books')
+          .update({ total_pages: totalPages })
+          .eq('id', activeBook.id);
+
+        if (error) {
+          console.error('[DB] update total_pages error:', error);
+          throw error;
+        }
+      } else {
+        // 로컬 Mock 모드 대응
+        const KEY_BOOKS = 'bookclub_mock_books';
+        const storedBooks = localStorage.getItem(KEY_BOOKS);
+        const booksList = storedBooks ? JSON.parse(storedBooks) : [];
+        const updated = booksList.map((b: any) => {
+          if (b.id === activeBook.id) {
+            return { ...b, total_pages: totalPages };
+          }
+          return b;
+        });
+        localStorage.setItem(KEY_BOOKS, JSON.stringify(updated));
+      }
+
+      // UI 갱신을 위해 데이터 재로드
+      await loadClubData(currentUser.id, activeClub.id);
+    } catch (err) {
+      console.error('[page] handleUpdateTotalPages error:', err);
+      throw err;
+    }
+  };
+
   const handleLogout = async () => {
     if (confirm('로그아웃 하시겠습니까?')) {
       if (isMockMode) {
@@ -264,10 +317,10 @@ export default function HomePage() {
 
   // 모임 흐름 단계 정의
   const workflowSteps = [
-    { label: '읽기 중', active: false },
-    { label: '질문 모으는 중', active: true },
-    { label: '토론', active: false },
-    { label: '결산', active: false }
+    { label: '책 읽기', active: false },
+    { label: '이야기 씨앗 고르기', active: true },
+    { label: '생각 나누기', active: false },
+    { label: '결산 회고', active: false }
   ];
 
   return (
@@ -324,39 +377,43 @@ export default function HomePage() {
         ) : (
           /* 모임 및 책 데이터 렌더링 (재정렬 순서 적용) */
           <div className="flex flex-col gap-3.5">
-            {/* 1. 현재 읽고 있는 책 카드 (최상단) */}
+            {/* 1. 모임 정보 카드 (최상단) */}
+            <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
+              <div className="flex justify-between items-start">
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">독서 공간</span>
+                  <h3 className="text-sm font-black text-foreground truncate">{activeClub.title}</h3>
+                  {activeClub.description && (
+                    <p className="text-[11px] text-foreground/55 mt-1 leading-snug">{activeClub.description}</p>
+                  )}
+                </div>
+                {/* 초대 코드 배지 내장 */}
+                <div className="bg-sage-light/60 px-2.5 py-1 rounded-lg border border-sage-light flex flex-col items-center flex-shrink-0">
+                  <span className="text-[8px] text-sage-dark font-black tracking-wider uppercase">초대코드</span>
+                  <span className="text-[11px] font-extrabold text-sage-dark tracking-wider">{activeClub.invite_code}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. 현재 읽고 있는 책 카드 */}
             {activeBook && (
               <BookProgressCard
                 book={activeBook}
                 progress={myProgress}
                 onUpdate={handleProgressUpdate}
+                onUpdateTotalPages={handleUpdateTotalPages}
               />
             )}
 
-            {/* 2. 우리 모임 상태 카드 (초대 코드 및 모임 제목 통합) */}
+            {/* 3. 함께 읽는 여정 카드 (기존 4번 '독서 흐름 단계 카드') */}
             <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
-              <div className="flex justify-between items-start">
-                <div className="flex flex-col">
-                  <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">독서 공간</span>
-                  <h3 className="text-sm font-black text-foreground">{activeClub.title}</h3>
-                  {activeClub.description && (
-                    <p className="text-[11px] text-foreground/55 mt-0.5 leading-snug">{activeClub.description}</p>
-                  )}
-                </div>
-                {/* 초대 코드 배지 내장 */}
-                <div className="bg-sage-light/60 px-2.5 py-1 rounded-lg border border-sage-light flex flex-col items-center">
-                  <span className="text-[8px] text-sage-dark font-black tracking-wider uppercase">초대코드</span>
-                  <span className="text-[11px] font-extrabold text-sage-dark tracking-wider">{activeClub.invite_code}</span>
-                </div>
-              </div>
-
               {/* 홈 화면용 압축형 감성 진행바 UI */}
-              <div className="flex flex-col gap-2.5 mt-2 bg-sage-light/10 border border-card-border/40 rounded-xl p-3">
+              <div className="flex flex-col gap-2.5">
                 <div className="flex justify-between items-center text-[9.5px]">
                   <span className="font-extrabold text-foreground/45">함께 책 읽는 여정 🗺️</span>
                   <span className="text-sage-dark font-black tracking-normal">
                     {discussionStage === 'reading' && '천천히 책 속으로 들어가는 시간 📖'}
-                    {discussionStage === 'question_collecting' && '질문이 자라나는 시간 🌱'}
+                    {discussionStage === 'question_collecting' && '함께 이야기할 질문을 조용히 골라봅니다. 🌱'}
                     {discussionStage === 'discussion' && '생각을 나누는 시간 💬'}
                     {discussionStage === 'archiving' && '이번 독서를 마음에 남기는 시간 🌙'}
                   </span>
@@ -377,7 +434,7 @@ export default function HomePage() {
 
                   {[
                     { key: 'reading', label: '책 읽기', emoji: '📖' },
-                    { key: 'question_collecting', label: '질문 수집', emoji: '🌱' },
+                    { key: 'question_collecting', label: '이야기 씨앗 고르기', emoji: '🌱' },
                     { key: 'discussion', label: '생각 나누기', emoji: '💬' },
                     { key: 'archiving', label: '결산 회고', emoji: '🌙' }
                   ].map((step, idx) => {
@@ -412,7 +469,44 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* 3. 질문 후보 진입 배너 카드 */}
+            {/* 4. 함께 읽는 진행률 카드 (기존 3번 '함께 읽는 진행률 카드') */}
+            {activeBook && (
+              <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4.5 shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md">
+                <div className="flex justify-between items-center">
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">모임 진행도</span>
+                    <h3 className="text-sm font-black text-foreground">함께 채워가는 중 🌱</h3>
+                  </div>
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sage-medium/10 border border-sage-medium/25 text-sage-medium rounded-full text-xs font-bold">
+                    <span>{membersProgress.length}명 함께 읽는 중</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex justify-between items-end text-xs font-bold">
+                    <span className="text-foreground/50">전체 평균 진행률</span>
+                    <span className="text-sm font-black text-sage-dark">{avgProgress}%</span>
+                  </div>
+                  
+                  {/* 프로그레스 바 */}
+                  <div className="w-full h-3 bg-sage-light/50 rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-sage-medium rounded-full transition-all duration-500 ease-out" 
+                      style={{ width: `${avgProgress}%` }} 
+                    />
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => router.push('/club')}
+                  className="w-full py-2 border border-card-border hover:bg-sage-light/10 text-foreground/75 hover:text-sage-dark rounded-xl text-xs font-black transition-all cursor-pointer flex justify-center items-center gap-1"
+                >
+                  전체 진행률 보기
+                </button>
+              </div>
+            )}
+
+            {/* 5. 질문 후보 카드 */}
             <div 
               onClick={handleDiscussionClick}
               className="bg-gradient-to-r from-sage-medium/90 to-sage-dark hover:from-sage-dark hover:to-sage-dark text-white rounded-2xl p-4.5 flex justify-between items-center shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5"
@@ -431,14 +525,6 @@ export default function HomePage() {
                 <ArrowRight size={11} />
               </div>
             </div>
-
-            {/* 4. 함께 읽는 이들의 여정 카드 */}
-            {activeBook && (
-              <MemberList
-                memberProgresses={membersProgress}
-                totalPages={activeBook.total_pages}
-              />
-            )}
           </div>
         )}
       </main>

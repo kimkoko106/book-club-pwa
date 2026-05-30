@@ -161,8 +161,15 @@ create table if not exists public.books (
   id uuid default gen_random_uuid() primary key,
   title text not null,
   author text not null,
-  total_pages integer not null check (total_pages > 0),
+  total_pages integer check (total_pages is null or total_pages > 0),
   cover_url text,
+  isbn text,
+  isbn13 text,
+  source text,
+  source_id text,
+  publisher text,
+  description text,
+  published_at text,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 
