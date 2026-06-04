@@ -3287,4 +3287,231 @@ export const clearSessionCache = () => {
   }
 };
 
+/**
+ * YYYY-MM-DD 또는 MM.DD 형태의 문자열을 Date 객체로 안전하게 변환하는 헬퍼 함수
+ */
+export function parseDateString(dateStr: string | null): Date | null {
+  if (!dateStr) return null;
+  const cleaned = dateStr.trim();
+  
+  // YYYY-MM-DD 형식 검사
+  if (cleaned.includes('-')) {
+    const parts = cleaned.split('-');
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10);
+      const day = parseInt(parts[2], 10);
+      if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+        const d = new Date(year, month - 1, day);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      }
+    }
+    const d = new Date(cleaned);
+    if (!isNaN(d.getTime())) {
+      d.setHours(0, 0, 0, 0);
+      return d;
+    }
+  }
+
+  // MM.DD 형식 검사
+  if (cleaned.includes('.')) {
+    const parts = cleaned.split('.');
+    if (parts.length === 2) {
+      const month = parseInt(parts[0], 10);
+      const day = parseInt(parts[1], 10);
+      if (!isNaN(month) && !isNaN(day)) {
+        const currentYear = new Date().getFullYear();
+        const d = new Date(currentYear, month - 1, day);
+        d.setHours(0, 0, 0, 0);
+        return d;
+      }
+    }
+  }
+
+  // Fallback
+  const d = new Date(cleaned);
+  if (!isNaN(d.getTime())) {
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+  return null;
+}
+
+/**
+ * 날짜 기반으로 현재 모임 진행 단계를 동적 계산하는 헬퍼 함수
+ */
+export function getStageByDates(
+  timelineReading: string | null,
+  timelineQuestion: string | null,
+  timelineDiscussion: string | null
+): 'reading' | 'question_collecting' | 'discussion' | 'archiving' | 'archived_recap' {
+  const getTodayDate = () => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+
+  const today = getTodayDate();
+
+  if (!timelineReading) return 'reading';
+
+  const parts = timelineReading.split('~');
+  if (parts.length !== 2) return 'reading';
+  
+  const readStart = parseDateString(parts[0]);
+  const readEnd = parseDateString(parts[1]);
+  if (!readStart || !readEnd) return 'reading';
+
+  // 1. 결산 완료 후 유예 기간 (readEnd 다음날부터 7일간)
+  const graceStart = new Date(readEnd);
+  graceStart.setDate(graceStart.getDate() + 1);
+  const graceEnd = new Date(readEnd);
+  graceEnd.setDate(graceEnd.getDate() + 7);
+
+  if (today >= graceStart && today <= graceEnd) {
+    return 'archived_recap';
+  }
+
+  // 2. 결산일 당일
+  if (today.getTime() === readEnd.getTime()) {
+    return 'archiving';
+  }
+
+  // 3. 토론 진행 단계 검사
+  if (timelineDiscussion) {
+    const tParts = timelineDiscussion.split('~');
+    if (tParts.length === 2) {
+      const tStart = parseDateString(tParts[0]);
+      const tEnd = parseDateString(tParts[1]);
+      if (tStart && tEnd && today >= tStart && today <= tEnd) {
+        return 'discussion';
+      }
+    }
+  }
+
+  // 4. 토론 주제 선정 단계 검사
+  if (timelineQuestion) {
+    const qParts = timelineQuestion.split('~');
+    if (qParts.length === 2) {
+      const qStart = parseDateString(qParts[0]);
+      const qEnd = parseDateString(qParts[1]);
+      if (qStart && qEnd && today >= qStart && today <= qEnd) {
+        return 'question_collecting';
+      }
+    }
+  }
+
+  return 'reading';
+}
+
+/**
+ * 독서 일정의 세부 타임라인(읽기, 토론 주제 선정, 토론, 결산) 날짜 범위를 역전 없이 안전하게 계산하는 함수
+ */
+export function calculateTimelineDates(
+  startDateStr: string,
+  endDateStr: string,
+  qDays: number,
+  tDays: number,
+  isAdvanced: boolean,
+  advancedDates?: {
+    qStartDate?: string;
+    qEndDate?: string;
+    tStartDate?: string;
+    tEndDate?: string;
+  }
+) {
+  const toYmd = (d: Date) => {
+    if (isNaN(d.getTime())) return '';
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const start = parseDateString(startDateStr) || new Date();
+  const end = parseDateString(endDateStr) || new Date();
+
+  // 역전 방지 기본 가드
+  if (start >= end) {
+    start.setTime(end.getTime() - 24 * 60 * 60 * 1000);
+  }
+
+  const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+  if (isAdvanced && advancedDates) {
+    // 고급 설정 시 수동 날짜들 검증 및 바인딩
+    const qs = parseDateString(advancedDates.qStartDate || '') || new Date(start);
+    const qe = parseDateString(advancedDates.qEndDate || '') || new Date(qs);
+    const ts = parseDateString(advancedDates.tStartDate || '') || new Date(qe);
+    const te = parseDateString(advancedDates.tEndDate || '') || new Date(ts);
+
+    // 날짜 간 역전 방지 논리 가드
+    if (qs < start) qs.setTime(start.getTime());
+    if (qe < qs) qe.setTime(qs.getTime());
+    if (ts <= qe) ts.setTime(qe.getTime() + 24 * 60 * 60 * 1000);
+    if (te < ts) te.setTime(ts.getTime());
+    if (te >= end) {
+      te.setTime(end.getTime() - 24 * 60 * 60 * 1000);
+      if (ts > te) ts.setTime(te.getTime());
+      if (qe >= ts) qe.setTime(ts.getTime() - 24 * 60 * 60 * 1000);
+      if (qs > qe) qs.setTime(qe.getTime());
+    }
+
+    const rEnd = new Date(qs);
+    rEnd.setDate(qs.getDate() - 1);
+    if (rEnd < start) rEnd.setTime(start.getTime());
+
+    return {
+      startDate: toYmd(start),
+      endDate: toYmd(end),
+      qStartDate: toYmd(qs),
+      qEndDate: toYmd(qe),
+      tStartDate: toYmd(ts),
+      tEndDate: toYmd(te),
+      rEndDate: toYmd(rEnd)
+    };
+  } else {
+    // 자동 계산 공식 (역전 방지 포함)
+    let safeTDays = tDays;
+    let safeQDays = qDays;
+
+    if (safeTDays + safeQDays + 1 > totalDays) {
+      safeTDays = Math.max(1, Math.floor((totalDays - 1) / 2));
+      safeQDays = Math.max(1, totalDays - 1 - safeTDays);
+    }
+
+    // 토론 종료일: 결산일(end) 하루 전
+    const tEnd = new Date(end);
+    tEnd.setDate(end.getDate() - 1);
+
+    // 토론 시작일: tEnd - safeTDays + 1
+    const tStart = new Date(tEnd);
+    tStart.setDate(tEnd.getDate() - safeTDays + 1);
+
+    // 토론 주제 선정 종료일: tStart 하루 전
+    const qEnd = new Date(tStart);
+    qEnd.setDate(tStart.getDate() - 1);
+
+    // 토론 주제 선정 시작일: qEnd - safeQDays + 1
+    const qStart = new Date(qEnd);
+    qStart.setDate(qEnd.getDate() - safeQDays + 1);
+
+    // 책 읽기 종료일: qStart 하루 전
+    const rEnd = new Date(qStart);
+    rEnd.setDate(qStart.getDate() - 1);
+
+    return {
+      startDate: toYmd(start),
+      endDate: toYmd(end),
+      qStartDate: toYmd(qStart),
+      qEndDate: toYmd(qEnd),
+      tStartDate: toYmd(tStart),
+      tEndDate: toYmd(tEnd),
+      rEndDate: toYmd(rEnd)
+    };
+  }
+}
+
+
 

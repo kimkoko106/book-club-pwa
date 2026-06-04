@@ -146,7 +146,7 @@ export default function SpoilerWarningPage() {
               onClick={() => router.push('/discussion')}
               className="w-full py-3 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-xs font-extrabold flex justify-center items-center gap-1.5 transition-all shadow-sm"
             >
-              {isDiscussion ? '생각 나누기 참여하기' : '기록 보관함 열기'}
+              {isDiscussion ? '토론 진행 참여하기' : '기록 보관함 열기'}
               <ChevronRight size={13} />
             </button>
           </div>

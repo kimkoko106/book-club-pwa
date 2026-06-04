@@ -2,18 +2,18 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi } from '../../lib/supabase';
+import { mockApi, getStageByDates, calculateTimelineDates, parseDateString } from '../../lib/supabase';
 import { BookClub, Book, UserBookProgress } from '../../types';
 import Navigation from '../../components/Navigation';
-import { 
-  Users, 
-  BookOpen, 
-  Compass, 
-  Plus, 
-  History, 
-  Settings, 
-  KeyRound, 
-  Sparkles, 
+import {
+  Users,
+  BookOpen,
+  Compass,
+  Plus,
+  History,
+  Settings,
+  KeyRound,
+  Sparkles,
   Copy,
   ChevronRight,
   ChevronDown,
@@ -23,6 +23,8 @@ import {
 export default function ClubHubPage() {
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [activeClub, setActiveClub] = useState<BookClub | null>(null);
+  const [showRecapGraceCard, setShowRecapGraceCard] = useState(false);
+  const [prevMonthlyBookId, setPrevMonthlyBookId] = useState<string | null>(null);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
   const [members, setMembers] = useState<UserBookProgress[]>([]);
   const [inviteCodeInput, setInviteCodeInput] = useState('');
@@ -43,7 +45,7 @@ export default function ClubHubPage() {
       const qList = await mockApi.discussion.getQuestions(clubId, bookId);
       // 선정된 질문들만 필터링
       const selectedQs = qList.filter(q => q.status === 'selected');
-      
+
       const qsWithComments = await Promise.all(selectedQs.map(async (q) => {
         const commentsList = await mockApi.discussion.getComments(q.id);
         return {
@@ -71,12 +73,13 @@ export default function ClubHubPage() {
         // 현재 모임의 단계를 다시 조회하여 'archiving' 단계인지 확인 및 recap 데이터 로드
         const monthlyBook = await mockApi.clubs.getMonthlyBook(clubId);
         if (monthlyBook) {
-          let uiStage = 'reading';
-          if (monthlyBook.stage === 'question') uiStage = 'question_collecting';
-          else if (monthlyBook.stage === 'discussion') uiStage = 'discussion';
-          else if (monthlyBook.stage === 'recap') uiStage = 'archiving';
-          
-          if (uiStage === 'archiving') {
+          const calculatedStage = getStageByDates(
+            monthlyBook.timeline_reading,
+            monthlyBook.timeline_question,
+            monthlyBook.timeline_discussion
+          );
+
+          if (calculatedStage === 'archiving' || calculatedStage === 'archived_recap') {
             await loadRecapData(clubId, book.id);
           }
         }
@@ -107,10 +110,22 @@ export default function ClubHubPage() {
           const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
           let currentUiStage = 'reading';
           if (monthlyBook) {
-            // DB stage -> UI stage mapping
-            if (monthlyBook.stage === 'question') currentUiStage = 'question_collecting';
-            else if (monthlyBook.stage === 'discussion') currentUiStage = 'discussion';
-            else if (monthlyBook.stage === 'recap') currentUiStage = 'archiving';
+            const calculatedStage = getStageByDates(
+              monthlyBook.timeline_reading,
+              monthlyBook.timeline_question,
+              monthlyBook.timeline_discussion
+            );
+
+            if (calculatedStage === 'archived_recap') {
+              currentUiStage = 'reading';
+              setShowRecapGraceCard(true);
+              setPrevMonthlyBookId(monthlyBook.id);
+            } else {
+              currentUiStage = calculatedStage;
+              setShowRecapGraceCard(false);
+              setPrevMonthlyBookId(null);
+            }
+            
             setStage(currentUiStage);
 
             // DB 타임라인 정보를 로컬스토리지 백업 (기존 파싱 구조 호환용)
@@ -145,50 +160,33 @@ export default function ClubHubPage() {
           const localIsAdvanced = localStorage.getItem(`bookclub_is_advanced_${club.id}`) === 'true';
 
           try {
-            const start = new Date(localStart);
-            const end = new Date(localEnd);
-            if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+            const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`) || '';
+            const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`) || '';
+            const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`) || '';
+            const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`) || '';
+
+            const calc = calculateTimelineDates(localStart, localEnd, localQDays, localTDays, localIsAdvanced, {
+              qStartDate: localQStart,
+              qEndDate: localQEnd,
+              tStartDate: localTStart,
+              tEndDate: localTEnd
+            });
+
+            if (calc) {
               const formatDateStr = (d: Date) => `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
+              
+              const start = parseDateString(calc.startDate);
+              const rEnd = parseDateString(calc.rEndDate);
+              const qStart = parseDateString(calc.qStartDate);
+              const qEnd = parseDateString(calc.qEndDate);
+              const tStart = parseDateString(calc.tStartDate);
+              const tEnd = parseDateString(calc.tEndDate);
 
-              if (localIsAdvanced) {
-                const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`);
-                const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`);
-                const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`);
-                const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`);
-
-                const qs = localQStart ? new Date(localQStart) : null;
-                const qe = localQEnd ? new Date(localQEnd) : null;
-                const ts = localTStart ? new Date(localTStart) : null;
-                const te = localTEnd ? new Date(localTEnd) : null;
-
-                let rEndStr = '';
-                if (qs && !isNaN(qs.getTime())) {
-                  const rEnd = new Date(qs);
-                  rEnd.setDate(qs.getDate() - 1);
-                  rEndStr = formatDateStr(rEnd);
-                }
-
-                setTimeline({
-                  reading: `${formatDateStr(start)}~${rEndStr || '?'}`,
-                  question: `${qs && !isNaN(qs.getTime()) ? formatDateStr(qs) : '?'}~${qe && !isNaN(qe.getTime()) ? formatDateStr(qe) : '?'}`,
-                  discussion: `${ts && !isNaN(ts.getTime()) ? formatDateStr(ts) : '?'}~${te && !isNaN(te.getTime()) ? formatDateStr(te) : '?'}`
-                });
-              } else {
-                const tStart = new Date(end);
-                tStart.setDate(end.getDate() - localTDays + 1);
-                const qStart = new Date(end);
-                qStart.setDate(end.getDate() - localQDays + 1);
-                const qEnd = new Date(tStart);
-                qEnd.setDate(tStart.getDate() - 1);
-                const rEnd = new Date(qStart);
-                rEnd.setDate(qStart.getDate() - 1);
-
-                setTimeline({
-                  reading: `${formatDateStr(start)}~${formatDateStr(rEnd)}`,
-                  question: `${formatDateStr(qStart)}~${formatDateStr(qEnd)}`,
-                  discussion: `${formatDateStr(tStart)}~${formatDateStr(end)}`
-                });
-              }
+              setTimeline({
+                reading: `${start ? formatDateStr(start) : ''}~${rEnd ? formatDateStr(rEnd) : ''}`,
+                question: `${qStart ? formatDateStr(qStart) : ''}~${qEnd ? formatDateStr(qEnd) : ''}`,
+                discussion: `${tStart ? formatDateStr(tStart) : ''}~${tEnd ? formatDateStr(tEnd) : ''}`
+              });
             }
           } catch (err) {
             console.warn('타임라인 연동 파싱 실패:', err);
@@ -266,7 +264,7 @@ export default function ClubHubPage() {
   return (
     <div className="flex-1 flex flex-col justify-between p-6 bg-background">
       <main className="flex-1 flex flex-col gap-5 pb-20">
-        
+
         {/* 헤더 타이틀 */}
         <div className="flex items-center justify-between py-1">
           <div className="flex flex-col gap-0.5">
@@ -289,21 +287,19 @@ export default function ClubHubPage() {
           <div className="flex bg-background/80 border border-card-border p-1 rounded-xl gap-1">
             <button
               onClick={() => setUserRole('admin')}
-              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                userRole === 'admin' 
-                  ? 'bg-sage-medium text-white shadow-sm' 
+              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all ${userRole === 'admin'
+                  ? 'bg-sage-medium text-white shadow-sm'
                   : 'text-foreground/50 hover:bg-sage-light/30'
-              }`}
+                }`}
             >
               방장
             </button>
             <button
               onClick={() => setUserRole('member')}
-              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all ${
-                userRole === 'member' 
-                  ? 'bg-sage-medium text-white shadow-sm' 
+              className={`px-3 py-1 rounded-lg text-[10px] font-bold transition-all ${userRole === 'member'
+                  ? 'bg-sage-medium text-white shadow-sm'
                   : 'text-foreground/50 hover:bg-sage-light/30'
-              }`}
+                }`}
             >
               모임원
             </button>
@@ -373,16 +369,16 @@ export default function ClubHubPage() {
           activeClub && stage === 'archiving' ? (
             /* 결산 회고 단계 전용 독서 노트 뷰 */
             <div className="flex flex-col gap-4">
-              
+
               {/* [1] 이번 달 함께 읽은 책 카드 (기록 표지) */}
               {activeBook && (
                 <div className="bg-card-bg border border-card-border rounded-3xl p-5 flex gap-4.5 shadow-sm items-center relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-24 h-24 bg-sage-light/20 rounded-full translate-x-10 -translate-y-10 -z-10" />
                   {activeBook.cover_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img 
-                      src={activeBook.cover_url} 
-                      alt={activeBook.title} 
+                    <img
+                      src={activeBook.cover_url}
+                      alt={activeBook.title}
                       className="w-16 h-22 rounded-xl object-cover shadow border border-card-border/60 flex-shrink-0"
                     />
                   ) : (
@@ -396,7 +392,7 @@ export default function ClubHubPage() {
                       </span>
                     </div>
                   )}
-                  
+
                   <div className="flex flex-col gap-1.5 min-w-0">
                     <span className="text-[8px] font-black text-sage-dark bg-sage-light/75 px-2 py-0.5 rounded-md leading-none w-fit">
                       이번 달 독서 여정 마침 🌙
@@ -442,12 +438,12 @@ export default function ClubHubPage() {
                     recapQuestions.map((q, idx) => {
                       const isOpen = openIndex === idx;
                       return (
-                        <div 
+                        <div
                           key={q.id}
                           className="bg-card-bg border border-card-border rounded-2xl overflow-hidden transition-all duration-300 shadow-sm"
                         >
                           {/* 질문 아코디언 헤더 */}
-                          <div 
+                          <div
                             onClick={() => setOpenIndex(isOpen ? null : idx)}
                             className="p-4.5 flex justify-between items-start gap-3 cursor-pointer hover:bg-sage-light/10 transition-colors"
                           >
@@ -479,15 +475,15 @@ export default function ClubHubPage() {
                                 q.comments.map((comment: any) => {
                                   const avatarUrl = comment.profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${comment.user_id}`;
                                   return (
-                                    <div 
+                                    <div
                                       key={comment.id}
                                       className="flex flex-col gap-1.5 bg-card-bg border border-card-border/60 rounded-xl p-4 shadow-inner"
                                     >
                                       <div className="flex justify-between items-center text-[10px] text-foreground/45 font-bold">
                                         <div className="flex items-center gap-1.5">
                                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                                          <img 
-                                            src={avatarUrl} 
+                                          <img
+                                            src={avatarUrl}
                                             alt={comment.profile?.username}
                                             className="w-4 h-4 rounded-full object-cover border border-card-border"
                                           />
@@ -512,7 +508,7 @@ export default function ClubHubPage() {
               </div>
 
               {/* [4] 다음 책으로 이어지는 흐름 (감성 칩 카드) */}
-              <div 
+              <div
                 onClick={() => router.push('/club/candidate')}
                 className="bg-background border border-card-border/80 hover:border-sage-medium rounded-2xl p-4 text-center shadow-xs cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 flex flex-col gap-1 group mt-2"
               >
@@ -530,14 +526,14 @@ export default function ClubHubPage() {
                 <div className="flex flex-col gap-3 mt-3 pt-3 border-t border-card-border/40">
                   <span className="text-[10px] font-bold text-sage-dark uppercase tracking-wider">모임 관리 메뉴</span>
                   <div className="grid grid-cols-2 gap-3">
-                    <div 
+                    <div
                       onClick={() => router.push('/club/settings')}
                       className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-20 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
                     >
                       <Settings size={15} className="text-foreground/50 group-hover:text-sage-dark" />
                       <h3 className="text-xs font-black text-foreground group-hover:text-sage-dark">모임 설정 관리</h3>
                     </div>
-                    <div 
+                    <div
                       onClick={() => router.push('/group/archive')}
                       className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-20 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
                     >
@@ -552,11 +548,31 @@ export default function ClubHubPage() {
           ) : (
             /* 일반 독서/질문/토론 단계 일 때의 모임 허브 UI */
             <div className="flex flex-col gap-4">
-              
+
+              {/* 결산 유예 기간 grace card (독서 종료 후 7일 이내 노출) */}
+              {showRecapGraceCard && prevMonthlyBookId && (
+                <div 
+                  onClick={() => router.push(`/group/archive/${prevMonthlyBookId}`)}
+                  className="bg-gradient-to-r from-sage-medium/90 to-sage-dark text-white rounded-2xl p-4.5 shadow-sm cursor-pointer hover:from-sage-dark hover:to-sage-dark transition-all flex justify-between items-center group animate-fade-in"
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-[8px] font-black text-white/70 uppercase tracking-widest leading-none">지난 여정의 열매 🌙</span>
+                    <h4 className="text-xs font-black flex items-center gap-1.5 text-white mt-1">
+                      지난 달 독서 결산 보기
+                    </h4>
+                    <p className="text-[9.5px] text-white/70 font-semibold leading-none mt-1">이전 달에 나눴던 아름다운 사색 조각과 회고록이 도착했어요.</p>
+                  </div>
+                  <span className="text-[9px] font-black bg-white/20 px-2.5 py-1 rounded-lg group-hover:bg-white/35 transition-all flex items-center gap-0.5 text-white">
+                    열기
+                    <ChevronRight size={10} />
+                  </span>
+                </div>
+              )}
+
               {/* 1. 모임 대문 정보 카드 */}
               <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-2.5 shadow-sm relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-sage-light/20 rounded-full translate-x-12 -translate-y-12 -z-10" />
-                
+
                 <span className="text-[9px] font-black text-sage-medium uppercase tracking-widest">현재 독서 공간</span>
                 <h2 className="text-base font-black text-foreground">{activeClub.title}</h2>
                 {activeClub.description ? (
@@ -587,20 +603,20 @@ export default function ClubHubPage() {
                   {/* 독서 흐름 4단계 수평 인디케이터 */}
                   <div className="flex justify-between items-center relative mt-2 px-1">
                     <div className="absolute top-[17px] left-7 right-7 border-t border-dashed border-card-border/90 z-0" />
-                    <div 
+                    <div
                       className="absolute top-[17px] left-7 border-t border-dashed border-sage-medium transition-all duration-300 z-0"
                       style={{
-                        width: 
+                        width:
                           stage === 'reading' ? '0%' :
-                          stage === 'question_collecting' ? '33%' :
-                          stage === 'discussion' ? '66%' : '100%'
+                            stage === 'question_collecting' ? '33%' :
+                              stage === 'discussion' ? '66%' : '100%'
                       }}
                     />
 
                     {[
                       { key: 'reading', label: '책 읽기', emoji: '📖', date: timeline.reading },
-                      { key: 'question_collecting', label: '이야기 씨앗 고르기', emoji: '🌱', date: timeline.question },
-                      { key: 'discussion', label: '생각 나누기', emoji: '💬', date: timeline.discussion },
+                      { key: 'question_collecting', label: '토론 주제 선정', emoji: '🗳️', date: timeline.question },
+                      { key: 'discussion', label: '토론 진행', emoji: '💬', date: timeline.discussion },
                       { key: 'archiving', label: '결산 회고', emoji: '🌙', date: '독서 마무리' }
                     ].map((step, idx) => {
                       const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(stage);
@@ -623,10 +639,9 @@ export default function ClubHubPage() {
                             {displayContent}
                           </div>
                           <div className="flex flex-col items-center text-center">
-                            <span className={`text-[9px] font-bold transition-colors leading-tight ${
-                              isActive ? 'text-sage-dark font-black' :
-                              isCompleted ? 'text-sage-medium/80' : 'text-foreground/35'
-                            }`}>
+                            <span className={`text-[9px] font-bold transition-colors leading-tight ${isActive ? 'text-sage-dark font-black' :
+                                isCompleted ? 'text-sage-medium/80' : 'text-foreground/35'
+                              }`}>
                               {step.label}
                             </span>
                             <span className="text-[7.5px] font-medium text-foreground/35 mt-0.5 tracking-tighter">
@@ -636,6 +651,30 @@ export default function ClubHubPage() {
                         </div>
                       );
                     })}
+                  </div>
+
+                  {/* Stepper 하단 짧은 감성 설명 카드 */}
+                  <div className="mt-2.5 bg-sage-light/30 border border-sage-light/60 rounded-xl p-3 flex items-start gap-2.5">
+                    <span className="text-sm mt-0.5 select-none">
+                      {stage === 'reading' && '📖'}
+                      {stage === 'question_collecting' && '🗳️'}
+                      {stage === 'discussion' && '💬'}
+                      {stage === 'archiving' && '🌙'}
+                    </span>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[10px] font-black text-sage-dark leading-none">
+                        {stage === 'reading' && '책 읽기 단계'}
+                        {stage === 'question_collecting' && '토론 주제 선정 단계'}
+                        {stage === 'discussion' && '토론 진행 단계'}
+                        {stage === 'archiving' && '결산 회고 단계'}
+                      </span>
+                      <p className="text-[8.5px] text-foreground/55 font-medium leading-relaxed mt-0.5">
+                        {stage === 'reading' && '천천히 읽으며 질문을 남겨보세요. 마음에 와닿는 구절이나 질문을 등록하고 공감해보세요.'}
+                        {stage === 'question_collecting' && '함께 오래 이야기할 토론 주제를 선정해요. 모인 질문 중 가장 나누고 싶은 주제를 골라주세요.'}
+                        {stage === 'discussion' && '선정 질문으로 자유롭게 대화해요. 다른 멤버의 생각과 댓글을 나누며 깊이 소통합니다.'}
+                        {stage === 'archiving' && '이번 달 독서를 돌아봐요. 지난 여정의 기록들을 보며 따뜻하게 회고해보세요.'}
+                      </p>
+                    </div>
                   </div>
                 </div>
               )}
@@ -651,7 +690,7 @@ export default function ClubHubPage() {
                       {members.length === 1 ? '기록 저장 중' : '실시간 진행 공유 중'}
                     </span>
                   </div>
-                  
+
                   <div className="flex items-center gap-2 overflow-x-auto py-1 scrollbar-none">
                     {members.map((member) => {
                       const avatarUrl = member.profile?.avatar_url || `https://api.dicebear.com/7.x/bottts/svg?seed=${member.user_id}`;
@@ -659,9 +698,9 @@ export default function ClubHubPage() {
                       return (
                         <div key={member.id} className="flex items-center gap-1.5 bg-background border border-card-border rounded-xl px-2.5 py-1.5 flex-shrink-0">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img 
-                            src={avatarUrl} 
-                            alt={member.profile?.username || '멤버'} 
+                          <img
+                            src={avatarUrl}
+                            alt={member.profile?.username || '멤버'}
                             className="w-5.5 h-5.5 rounded-full object-cover border border-card-border"
                           />
                           <div className="flex flex-col">
@@ -669,7 +708,7 @@ export default function ClubHubPage() {
                               {member.profile?.username} {isMe && '(나)'}
                             </span>
                             <span className="text-[8px] text-foreground/40 font-medium mt-0.5">
-                              {member.status === 'completed' ? '완독!' : `${member.current_page}p`}
+                              {member.status === 'completed' ? '완독!' : `${member.current_page}%`}
                             </span>
                           </div>
                         </div>
@@ -687,8 +726,8 @@ export default function ClubHubPage() {
 
               {/* 4. 허브 메뉴 카드 격자 레이아웃 */}
               <div className="grid grid-cols-2 gap-3 mt-1">
-                
-                <div 
+
+                <div
                   onClick={() => router.push('/group/archive')}
                   className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-28 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
                 >
@@ -704,7 +743,7 @@ export default function ClubHubPage() {
                   </div>
                 </div>
 
-                <div 
+                <div
                   onClick={() => router.push('/club/candidate')}
                   className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-28 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
                 >
@@ -720,7 +759,7 @@ export default function ClubHubPage() {
                   </div>
                 </div>
 
-                <div 
+                <div
                   onClick={handleCopyCode}
                   className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-28 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
                 >
@@ -737,7 +776,7 @@ export default function ClubHubPage() {
                 </div>
 
                 {userRole === 'admin' && (
-                  <div 
+                  <div
                     onClick={() => router.push('/club/settings')}
                     className="bg-card-bg border border-card-border hover:border-sage-medium rounded-2xl p-4 flex flex-col justify-between h-28 shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 group"
                   >
@@ -763,7 +802,7 @@ export default function ClubHubPage() {
       </main>
 
       {/* 하단 내비게이션 바 */}
-      <Navigation currentUser={currentUser} onLogout={() => {}} />
+      <Navigation currentUser={currentUser} onLogout={() => { }} />
     </div>
   );
 }

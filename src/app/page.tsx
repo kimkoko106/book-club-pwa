@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi, isMockMode, supabase, checkIsCompleted, clearSessionCache } from '../lib/supabase';
+import { mockApi, isMockMode, supabase, checkIsCompleted, clearSessionCache, getStageByDates } from '../lib/supabase';
 import { BookClub, Book, UserBookProgress } from '../types';
 import BookProgressCard from '../components/BookProgressCard';
 import Navigation from '../components/Navigation';
@@ -12,6 +12,8 @@ import { BookOpen, Compass, Plus, Sparkles, LogOut, ArrowRight, MessageSquare } 
 export default function HomePage() {
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [activeClub, setActiveClub] = useState<BookClub | null>(null);
+  const [showRecapGraceCard, setShowRecapGraceCard] = useState(false);
+  const [prevMonthlyBookId, setPrevMonthlyBookId] = useState<string | null>(null);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
   const [myProgress, setMyProgress] = useState<UserBookProgress | null>(null);
   const [membersProgress, setMembersProgress] = useState<UserBookProgress[]>([]);
@@ -95,33 +97,94 @@ export default function HomePage() {
       const monthlyBook = await mockApi.clubs.getMonthlyBook(clubId);
       
       if (monthlyBook) {
-        const book = monthlyBook.books;
-        setActiveBook(book);
+        const calculatedStage = getStageByDates(
+          monthlyBook.timeline_reading,
+          monthlyBook.timeline_question,
+          monthlyBook.timeline_discussion
+        );
 
-        // DB stage -> UI stage mapping
         let uiStage: 'reading' | 'question_collecting' | 'discussion' | 'archiving' = 'reading';
-        if (monthlyBook.stage === 'question') uiStage = 'question_collecting';
-        else if (monthlyBook.stage === 'discussion') uiStage = 'discussion';
-        else if (monthlyBook.stage === 'recap') uiStage = 'archiving';
+        if (calculatedStage === 'archived_recap') {
+          // 결산 유예 단계: 이전 책이 유예기간이므로 메인은 새책 준비상태가 됨 (새 공유책이 없는 상태)
+          setActiveBook(null);
+          uiStage = 'reading';
+          setShowRecapGraceCard(true);
+          setPrevMonthlyBookId(monthlyBook.id);
+        } else {
+          // 일반적인 단계: 이 책을 메인으로 노출
+          const book = monthlyBook.books;
+          setActiveBook(book);
+          uiStage = calculatedStage === 'archiving' ? 'archiving' : calculatedStage as any;
+          
+          // 추가: 최근 아카이브된 책이 유예기간(7일) 내라면 결산 카드 노출
+          try {
+            const archives = await mockApi.discussion.getArchiveList(clubId);
+            if (archives.length > 0) {
+              const latestArchive = archives[0];
+              const archiveDetail = await mockApi.discussion.getArchiveDetail(latestArchive.id);
+              if (archiveDetail && archiveDetail.timeline_reading) {
+                const parts = archiveDetail.timeline_reading.split('~');
+                if (parts.length === 2) {
+                  const readEnd = parts[1];
+                  const getTodayYmd = () => {
+                    const d = new Date();
+                    const y = d.getFullYear();
+                    const m = String(d.getMonth() + 1).padStart(2, '0');
+                    const day = String(d.getDate()).padStart(2, '0');
+                    return `${y}-${m}-${day}`;
+                  };
+                  const todayStr = getTodayYmd();
+                  if (todayStr > readEnd) {
+                    const graceDateObj = new Date(readEnd);
+                    graceDateObj.setDate(graceDateObj.getDate() + 7);
+                    const graceY = graceDateObj.getFullYear();
+                    const graceM = String(graceDateObj.getMonth() + 1).padStart(2, '0');
+                    const graceD = String(graceDateObj.getDate()).padStart(2, '0');
+                    const graceEnd = `${graceY}-${graceM}-${graceD}`;
+                    
+                    if (todayStr <= graceEnd) {
+                      setShowRecapGraceCard(true);
+                      setPrevMonthlyBookId(latestArchive.id);
+                    } else {
+                      setShowRecapGraceCard(false);
+                      setPrevMonthlyBookId(null);
+                    }
+                  } else {
+                    setShowRecapGraceCard(false);
+                    setPrevMonthlyBookId(null);
+                  }
+                }
+              }
+            } else {
+              setShowRecapGraceCard(false);
+              setPrevMonthlyBookId(null);
+            }
+          } catch {
+            setShowRecapGraceCard(false);
+            setPrevMonthlyBookId(null);
+          }
+
+          if (book) {
+            // 내 독서 진행도 조회
+            const progresses = await mockApi.progress.getMemberProgressList(clubId, book.id);
+            const mine = progresses.find((p) => p.user_id === userId) || null;
+            setMyProgress(mine);
+            
+            // 동료 진행도 조회
+            setMembersProgress(progresses);
+            
+            // 질문 후보 개수 조회
+            const questions = await mockApi.discussion.getQuestions(clubId, book.id);
+            setQuestionCount(questions.length);
+          }
+        }
         
         setDiscussionStage(uiStage);
-
-        if (book) {
-          // 내 독서 진행도 조회
-          const progresses = await mockApi.progress.getMemberProgressList(clubId, book.id);
-          const mine = progresses.find((p) => p.user_id === userId) || null;
-          setMyProgress(mine);
-          
-          // 동료 진행도 조회
-          setMembersProgress(progresses);
-          
-          // 질문 후보 개수 조회
-          const questions = await mockApi.discussion.getQuestions(clubId, book.id);
-          setQuestionCount(questions.length);
-        }
       } else {
         setActiveBook(null);
         setDiscussionStage('reading');
+        setShowRecapGraceCard(false);
+        setPrevMonthlyBookId(null);
       }
     } catch (err) {
       console.error('모임 데이터 로드 실패:', err);
@@ -318,8 +381,8 @@ export default function HomePage() {
   // 모임 흐름 단계 정의
   const workflowSteps = [
     { label: '책 읽기', active: false },
-    { label: '이야기 씨앗 고르기', active: true },
-    { label: '생각 나누기', active: false },
+    { label: '토론 주제 선정', active: true },
+    { label: '토론 진행', active: false },
     { label: '결산 회고', active: false }
   ];
 
@@ -395,136 +458,197 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* 2. 현재 읽고 있는 책 카드 */}
-            {activeBook && (
-              <BookProgressCard
-                book={activeBook}
-                progress={myProgress}
-                onUpdate={handleProgressUpdate}
-                onUpdateTotalPages={handleUpdateTotalPages}
-              />
-            )}
+            {/* 2. 현재 읽고 있는 책 카드 혹은 새 공유책 권유 카드 */}
+            {activeBook ? (
+              <>
+                <BookProgressCard
+                  book={activeBook}
+                  progress={myProgress}
+                  onUpdate={handleProgressUpdate}
+                  onUpdateTotalPages={handleUpdateTotalPages}
+                />
 
-            {/* 3. 함께 읽는 여정 카드 (기존 4번 '독서 흐름 단계 카드') */}
-            <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
-              {/* 홈 화면용 압축형 감성 진행바 UI */}
-              <div className="flex flex-col gap-2.5">
-                <div className="flex justify-between items-center text-[9.5px]">
-                  <span className="font-extrabold text-foreground/45">함께 책 읽는 여정 🗺️</span>
-                  <span className="text-sage-dark font-black tracking-normal">
-                    {discussionStage === 'reading' && '천천히 책 속으로 들어가는 시간 📖'}
-                    {discussionStage === 'question_collecting' && '함께 이야기할 질문을 조용히 골라봅니다. 🌱'}
-                    {discussionStage === 'discussion' && '생각을 나누는 시간 💬'}
-                    {discussionStage === 'archiving' && '이번 독서를 마음에 남기는 시간 🌙'}
-                  </span>
-                </div>
+                {/* 3. 함께 읽는 여정 카드 (기존 4번 '독서 흐름 단계 카드') */}
+                <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
+                  {/* 홈 화면용 압축형 감성 진행바 UI */}
+                  <div className="flex flex-col gap-2.5">
+                    <div className="flex justify-between items-center text-[9.5px]">
+                      <span className="font-extrabold text-foreground/45">함께 책 읽는 여정 🗺️</span>
+                      <span className="text-sage-dark font-black tracking-normal">
+                        {discussionStage === 'reading' && '천천히 읽으며 질문을 남겨보세요 📖'}
+                        {discussionStage === 'question_collecting' && '함께 오래 이야기할 질문을 골라요 🌱'}
+                        {discussionStage === 'discussion' && '선정 질문으로 자유롭게 대화해요 💬'}
+                        {discussionStage === 'archiving' && '이번 달 독서를 돌아봐요 🌙'}
+                      </span>
+                    </div>
 
-                <div className="flex items-center justify-between relative px-2 py-1 mt-1">
-                  {/* 연결 선 (다이어리 감성 얇은 점선) */}
-                  <div className="absolute top-[13px] left-6 right-6 border-t border-dashed border-card-border/80 z-0" />
-                  <div 
-                    className="absolute top-[13px] left-6 border-t border-dashed border-sage-medium/70 transition-all duration-300 z-0"
-                    style={{
-                      width: 
-                        discussionStage === 'reading' ? '0%' :
-                        discussionStage === 'question_collecting' ? '33%' :
-                        discussionStage === 'discussion' ? '66%' : '100%'
-                    }}
-                  />
+                    <div className="flex items-center justify-between relative px-2 py-1 mt-1">
+                      {/* 연결 선 (다이어리 감성 얇은 점선) */}
+                      <div className="absolute top-[13px] left-6 right-6 border-t border-dashed border-card-border/80 z-0" />
+                      <div 
+                        className="absolute top-[13px] left-6 border-t border-dashed border-sage-medium/70 transition-all duration-300 z-0"
+                        style={{
+                          width: 
+                            discussionStage === 'reading' ? '0%' :
+                            discussionStage === 'question_collecting' ? '33%' :
+                            discussionStage === 'discussion' ? '66%' : '100%'
+                        }}
+                      />
 
-                  {[
-                    { key: 'reading', label: '책 읽기', emoji: '📖' },
-                    { key: 'question_collecting', label: '이야기 씨앗 고르기', emoji: '🌱' },
-                    { key: 'discussion', label: '생각 나누기', emoji: '💬' },
-                    { key: 'archiving', label: '결산 회고', emoji: '🌙' }
-                  ].map((step, idx) => {
-                    const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(discussionStage);
-                    const isActive = step.key === discussionStage;
-                    const isCompleted = idx < currentIdx;
+                      {[
+                        { key: 'reading', label: '책 읽기', emoji: '📖' },
+                        { key: 'question_collecting', label: '토론 주제 선정', emoji: '🗳️' },
+                        { key: 'discussion', label: '토론 진행', emoji: '💬' },
+                        { key: 'archiving', label: '결산 회고', emoji: '🌙' }
+                      ].map((step, idx) => {
+                        const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(discussionStage);
+                        const isActive = step.key === discussionStage;
+                        const isCompleted = idx < currentIdx;
 
-                    let statusBg = 'bg-card-bg border-card-border/60 text-foreground/30 opacity-40';
-                    let displayContent = step.emoji;
+                        let statusBg = 'bg-card-bg border-card-border/60 text-foreground/30 opacity-40';
+                        let displayContent = step.emoji;
 
-                    if (isActive) {
-                      statusBg = 'bg-sage-light border-sage-medium text-sage-dark scale-105 shadow-xs ring-2 ring-sage-light/50 font-black';
-                    } else if (isCompleted) {
-                      statusBg = 'bg-sage-medium/10 border-sage-medium/30 text-sage-medium';
-                      displayContent = '✨';
-                    }
+                        if (isActive) {
+                          statusBg = 'bg-sage-light border-sage-medium text-sage-dark scale-105 shadow-xs ring-2 ring-sage-light/50 font-black';
+                        } else if (isCompleted) {
+                          statusBg = 'bg-sage-medium/10 border-sage-medium/30 text-sage-medium';
+                          displayContent = '✨';
+                        }
 
-                    return (
-                      <div key={step.key} className="flex flex-col items-center gap-1 z-10 select-none">
-                        {/* 더 콤팩트한 w-6.5 h-6.5 노드 */}
-                        <div className={`w-6.5 h-6.5 rounded-xl border flex justify-center items-center text-xs transition-all duration-300 ${statusBg}`}>
-                          {displayContent}
-                        </div>
-                        <span className={`text-[8px] font-bold ${
-                          isActive ? 'text-sage-dark font-black' :
-                          isCompleted ? 'text-sage-medium/70' : 'text-foreground/35'
-                        }`}>{step.label}</span>
+                        return (
+                          <div key={step.key} className="flex flex-col items-center gap-1 z-10 select-none">
+                            {/* 더 콤팩트한 w-6.5 h-6.5 노드 */}
+                            <div className={`w-6.5 h-6.5 rounded-xl border flex justify-center items-center text-xs transition-all duration-300 ${statusBg}`}>
+                              {displayContent}
+                            </div>
+                            <span className={`text-[8px] font-bold ${
+                              isActive ? 'text-sage-dark font-black' :
+                              isCompleted ? 'text-sage-medium/70' : 'text-foreground/35'
+                            }`}>{step.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Stepper 하단 한 줄 설명 칩 */}
+                    <div className="mt-2 bg-sage-light/35 border border-sage-light rounded-xl p-2.5 flex items-center gap-2">
+                      <div className="w-5 h-5 rounded-lg bg-sage-medium flex justify-center items-center text-xs text-white">
+                        {discussionStage === 'reading' && '📖'}
+                        {discussionStage === 'question_collecting' && '🗳️'}
+                        {discussionStage === 'discussion' && '💬'}
+                        {discussionStage === 'archiving' && '🌙'}
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* 4. 함께 읽는 진행률 카드 (기존 3번 '함께 읽는 진행률 카드') */}
-            {activeBook && (
-              <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4.5 shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md">
-                <div className="flex justify-between items-center">
-                  <div className="flex flex-col">
-                    <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">모임 진행도</span>
-                    <h3 className="text-sm font-black text-foreground">함께 채워가는 중 🌱</h3>
-                  </div>
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sage-medium/10 border border-sage-medium/25 text-sage-medium rounded-full text-xs font-bold">
-                    <span>{membersProgress.length}명 함께 읽는 중</span>
-                  </div>
-                </div>
-
-                <div className="flex flex-col gap-1.5">
-                  <div className="flex justify-between items-end text-xs font-bold">
-                    <span className="text-foreground/50">전체 평균 진행률</span>
-                    <span className="text-sm font-black text-sage-dark">{avgProgress}%</span>
-                  </div>
-                  
-                  {/* 프로그레스 바 */}
-                  <div className="w-full h-3 bg-sage-light/50 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-sage-medium rounded-full transition-all duration-500 ease-out" 
-                      style={{ width: `${avgProgress}%` }} 
-                    />
+                      <div className="flex flex-col">
+                        <span className="text-[9.5px] font-black text-sage-dark leading-snug">
+                          {discussionStage === 'reading' && '지금은 [책 읽기] 단계예요'}
+                          {discussionStage === 'question_collecting' && '지금은 [토론 주제 선정] 단계예요'}
+                          {discussionStage === 'discussion' && '지금은 [토론 진행] 단계예요'}
+                          {discussionStage === 'archiving' && '지금은 [결산 회고] 단계예요'}
+                        </span>
+                        <span className="text-[8px] text-foreground/50 font-medium leading-relaxed">
+                          {discussionStage === 'reading' && '천천히 읽으며 마음에 남는 질문을 남겨보세요.'}
+                          {discussionStage === 'question_collecting' && '모인 질문 중에서 가장 나누고 싶은 토론 주제를 선정합니다.'}
+                          {discussionStage === 'discussion' && '선정된 질문으로 자유롭게 대화하고 생각을 나누어봐요.'}
+                          {discussionStage === 'archiving' && '이번 달 독서 여정을 돌아보고 소감을 마무리해요.'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <button
-                  onClick={() => router.push('/club')}
-                  className="w-full py-2 border border-card-border hover:bg-sage-light/10 text-foreground/75 hover:text-sage-dark rounded-xl text-xs font-black transition-all cursor-pointer flex justify-center items-center gap-1"
+                {/* 4. 함께 읽는 진행률 카드 (기존 3번 '함께 읽는 진행률 카드') */}
+                <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4.5 shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md">
+                  <div className="flex justify-between items-center">
+                    <div className="flex flex-col">
+                      <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">모임 진행도</span>
+                      <h3 className="text-sm font-black text-foreground">함께 채워가는 중 🌱</h3>
+                    </div>
+                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sage-medium/10 border border-sage-medium/25 text-sage-medium rounded-full text-xs font-bold">
+                      <span>{membersProgress.length}명 함께 읽는 중</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <div className="flex justify-between items-end text-xs font-bold">
+                      <span className="text-foreground/50">전체 평균 진행률</span>
+                      <span className="text-sm font-black text-sage-dark">{avgProgress}%</span>
+                    </div>
+                    
+                    {/* 프로그레스 바 */}
+                    <div className="w-full h-3 bg-sage-light/50 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-sage-medium rounded-full transition-all duration-500 ease-out" 
+                        style={{ width: `${avgProgress}%` }} 
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => router.push('/club')}
+                    className="w-full py-2 border border-card-border hover:bg-sage-light/10 text-foreground/75 hover:text-sage-dark rounded-xl text-xs font-black transition-all cursor-pointer flex justify-center items-center gap-1"
+                  >
+                    전체 진행률 보기
+                  </button>
+                </div>
+
+                {/* 5. 질문 후보 카드 */}
+                <div 
+                  onClick={handleDiscussionClick}
+                  className="bg-gradient-to-r from-sage-medium/90 to-sage-dark hover:from-sage-dark hover:to-sage-dark text-white rounded-2xl p-4.5 flex justify-between items-center shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5"
                 >
-                  전체 진행률 보기
+                  <div className="flex items-center gap-3">
+                    <div className="w-9.5 h-9.5 bg-white/10 rounded-xl flex justify-center items-center">
+                      <MessageSquare size={18} className="text-white" />
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      <h4 className="text-xs font-extrabold">질문 후보가 {questionCount}개 모였습니다</h4>
+                      <p className="text-[10px] text-white/80 font-medium">오래 붙잡고 싶은 질문들을 살펴보세요.</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-0.5 text-[10px] font-bold bg-white/10 px-2.5 py-1.5 rounded-xl hover:bg-white/20 transition-all">
+                    <span>토론 보러가기</span>
+                    <ArrowRight size={11} />
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* 새 공유책이 없는 경우 예외 상태 노출 */
+              <div className="bg-card-bg border border-card-border border-dashed rounded-2xl p-6.5 text-center flex flex-col items-center gap-3.5 shadow-sm">
+                <div className="w-12 h-12 bg-sage-light/40 rounded-2xl flex justify-center items-center text-sage-dark shadow-inner">
+                  <BookOpen size={20} />
+                </div>
+                <div className="flex flex-col gap-1 px-1">
+                  <h4 className="text-xs font-extrabold text-foreground leading-snug">다음 공유책을 제안해주세요 📖</h4>
+                  <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">아직 이번 달 함께 읽을 새 공유책이 등록되지 않았습니다.</p>
+                </div>
+                <button
+                  onClick={() => router.push('/club/candidate')}
+                  className="px-4 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs transition-all cursor-pointer"
+                >
+                  책 후보방으로 이동
                 </button>
               </div>
             )}
 
-            {/* 5. 질문 후보 카드 */}
-            <div 
-              onClick={handleDiscussionClick}
-              className="bg-gradient-to-r from-sage-medium/90 to-sage-dark hover:from-sage-dark hover:to-sage-dark text-white rounded-2xl p-4.5 flex justify-between items-center shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-9.5 h-9.5 bg-white/10 rounded-xl flex justify-center items-center">
-                  <MessageSquare size={18} className="text-white" />
-                </div>
+            {/* 결산 유예 기간 grace card (독서 종료 후 7일 이내 노출 - 최하단 보조 노출) */}
+            {showRecapGraceCard && prevMonthlyBookId && (
+              <div 
+                onClick={() => router.push(`/group/archive/${prevMonthlyBookId}`)}
+                className="bg-gradient-to-r from-sage-medium/90 to-sage-dark text-white rounded-2xl p-4.5 shadow-sm cursor-pointer hover:from-sage-dark hover:to-sage-dark transition-all flex justify-between items-center group animate-fade-in mt-1"
+              >
                 <div className="flex flex-col gap-0.5">
-                  <h4 className="text-xs font-extrabold">질문 후보가 {questionCount}개 모였습니다</h4>
-                  <p className="text-[10px] text-white/80 font-medium">오래 붙잡고 싶은 질문들을 살펴보세요.</p>
+                  <span className="text-[8px] font-black text-white/70 uppercase tracking-widest leading-none">지난 여정의 열매 🌙</span>
+                  <h4 className="text-xs font-black flex items-center gap-1.5 text-white mt-1">
+                    지난 달 독서 결산 보기
+                  </h4>
+                  <p className="text-[9.5px] text-white/70 font-semibold leading-none mt-1">이전 달에 나눴던 아름다운 사색 조각과 회고록이 도착했어요.</p>
                 </div>
+                <span className="text-[9px] font-black bg-white/20 px-2.5 py-1 rounded-lg group-hover:bg-white/35 transition-all flex items-center gap-0.5 text-white">
+                  열기
+                  <ArrowRight size={10} />
+                </span>
               </div>
-              <div className="flex items-center gap-0.5 text-[10px] font-bold bg-white/10 px-2.5 py-1.5 rounded-xl hover:bg-white/20 transition-all">
-                <span>토론 보러가기</span>
-                <ArrowRight size={11} />
-              </div>
-            </div>
+            )}
           </div>
         )}
       </main>

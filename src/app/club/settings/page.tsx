@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi, isMockMode, supabase } from '../../../lib/supabase';
+import { mockApi, isMockMode, supabase, getStageByDates, calculateTimelineDates, parseDateString } from '../../../lib/supabase';
 import { BookClub, Book, UserBookProgress } from '../../../types';
 import { 
   ArrowLeft, 
@@ -57,11 +57,12 @@ export default function ClubSettingsPage() {
   // 단계 라벨 한국어 변환
   const getStageLabel = (s: string) => {
     switch (s) {
-      case 'reading': return '1단계: 책 읽는 중 🌱';
-      case 'question_collecting': return '2단계: 질문 수집 중 ✍️';
-      case 'discussion': return '3단계: 사색 나누는 중 💬';
-      case 'archiving': return '4단계: 결산 및 아카이빙 📦';
-      default: return '책 읽는 중 🌱';
+      case 'reading': return '1단계: 책 읽기 🌱';
+      case 'question_collecting': return '2단계: 토론 주제 선정 🗳️';
+      case 'discussion': return '3단계: 토론 진행 💬';
+      case 'archiving': return '4단계: 결산 회고 🌙';
+      case 'archived_recap': return '결산 완료 🌙';
+      default: return '책 읽기 🌱';
     }
   };
 
@@ -148,16 +149,22 @@ export default function ClubSettingsPage() {
 
           // monthly_books 정보 조회 및 로컬 백업
           const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
-          if (monthlyBook) {
-            let uiStage = 'reading';
-            if (monthlyBook.stage === 'question') uiStage = 'question_collecting';
-            else if (monthlyBook.stage === 'discussion') uiStage = 'discussion';
-            else if (monthlyBook.stage === 'recap') uiStage = 'archiving';
-            setStage(uiStage as any);
+          let tempStart = '2026-05-01';
+          let tempEnd = '2026-05-31';
+          let tempQStart = '2026-05-20';
+          let tempQEnd = '2026-05-25';
+          let tempTStart = '2026-05-26';
+          let tempTEnd = '2026-05-31';
+          let tempQDays = 10;
+          let tempTDays = 5;
+          let tempIsAdvanced = false;
 
+          if (monthlyBook) {
             if (monthlyBook.timeline_reading) {
               const parts = monthlyBook.timeline_reading.split('~');
               if (parts.length === 2) {
+                tempStart = parts[0];
+                tempEnd = parts[1];
                 localStorage.setItem(`bookclub_start_date_${club.id}`, parts[0]);
                 localStorage.setItem(`bookclub_end_date_${club.id}`, parts[1]);
               }
@@ -165,6 +172,8 @@ export default function ClubSettingsPage() {
             if (monthlyBook.timeline_question) {
               const parts = monthlyBook.timeline_question.split('~');
               if (parts.length === 2) {
+                tempQStart = parts[0];
+                tempQEnd = parts[1];
                 localStorage.setItem(`bookclub_q_start_date_${club.id}`, parts[0]);
                 localStorage.setItem(`bookclub_q_end_date_${club.id}`, parts[1]);
               }
@@ -172,34 +181,66 @@ export default function ClubSettingsPage() {
             if (monthlyBook.timeline_discussion) {
               const parts = monthlyBook.timeline_discussion.split('~');
               if (parts.length === 2) {
+                tempTStart = parts[0];
+                tempTEnd = parts[1];
                 localStorage.setItem(`bookclub_t_start_date_${club.id}`, parts[0]);
                 localStorage.setItem(`bookclub_t_end_date_${club.id}`, parts[1]);
               }
             }
-            localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, uiStage);
           }
 
-          // 로컬스토리지에 저장된 독서 흐름 설정 로드
+          // 로컬스토리지에 저장된 독서 흐름 설정 로드 및 보완
           const localStart = localStorage.getItem(`bookclub_start_date_${club.id}`);
           const localEnd = localStorage.getItem(`bookclub_end_date_${club.id}`);
           const localQDays = localStorage.getItem(`bookclub_q_days_${club.id}`);
           const localTDays = localStorage.getItem(`bookclub_t_days_${club.id}`);
-          const localStage = localStorage.getItem(`bookclub_mock_club_stage_${club.id}`);
           const localIsAdvanced = localStorage.getItem(`bookclub_is_advanced_${club.id}`);
           const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`);
           const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`);
           const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`);
           const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`);
 
-          if (localStart) setStartDate(localStart);
-          if (localEnd) setEndDate(localEnd);
-          if (localQDays) setQDays(Number(localQDays));
-          if (localTDays) setTDays(Number(localTDays));
-          if (localStage) setStage(localStage as any);
-          if (localQStart) setQStartDate(localQStart);
-          if (localQEnd) setQEndDate(localQEnd);
-          if (localTStart) setTStartDate(localTStart);
-          if (localTEnd) setTEndDate(localTEnd);
+          if (localStart) tempStart = localStart;
+          if (localEnd) tempEnd = localEnd;
+          if (localQDays) tempQDays = Number(localQDays);
+          if (localTDays) tempTDays = Number(localTDays);
+          if (localIsAdvanced) tempIsAdvanced = localIsAdvanced === 'true';
+          if (localQStart) tempQStart = localQStart;
+          if (localQEnd) tempQEnd = localQEnd;
+          if (localTStart) tempTStart = localTStart;
+          if (localTEnd) tempTEnd = localTEnd;
+
+          // 자동 일정 계산 모드일 경우 calculateTimelineDates 결과를 덮어씀
+          if (!tempIsAdvanced) {
+            const calc = calculateTimelineDates(tempStart, tempEnd, tempQDays, tempTDays, false);
+            if (calc) {
+              tempQStart = calc.qStartDate;
+              tempQEnd = calc.qEndDate;
+              tempTStart = calc.tStartDate;
+              tempTEnd = calc.tEndDate;
+            }
+          }
+
+          // 날짜 및 상태 설정
+          setStartDate(tempStart);
+          setEndDate(tempEnd);
+          setQDays(tempQDays);
+          setTDays(tempTDays);
+          setIsAdvanced(tempIsAdvanced);
+          setQStartDate(tempQStart);
+          setQEndDate(tempQEnd);
+          setTStartDate(tempTStart);
+          setTEndDate(tempTEnd);
+
+          // stage 계산 강제 적용 (수동 설정 로드 대신 getStageByDates 이용)
+          const calculated = getStageByDates(
+            `${tempStart}~${tempEnd}`,
+            tempQStart && tempQEnd ? `${tempQStart}~${tempQEnd}` : null,
+            tempTStart && tempTEnd ? `${tempTStart}~${tempTEnd}` : null
+          );
+          let uiStage = calculated === 'archived_recap' ? 'archiving' : calculated;
+          setStage(uiStage as any);
+          localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, uiStage);
 
           const book = await mockApi.books.getByClub(club.id);
           setActiveBook(book);
@@ -219,97 +260,173 @@ export default function ClubSettingsPage() {
     loadData();
   }, [router]);
 
+
+  // 날짜 간 차이를 계산하는 헬퍼 (일수 단위)
+  const getDaysBetween = (startStr: string, endStr: string): number => {
+    const start = parseDateString(startStr);
+    const end = parseDateString(endStr);
+    if (!start || !end) return 1;
+    const diffTime = end.getTime() - start.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+    return diffDays > 0 ? diffDays : 1;
+  };
+
+  // --- 양방향 동기화 핸들러 (calculateTimelineDates 적용) ---
+  const handleQDaysChange = (val: number) => {
+    setQDays(val);
+    const calc = calculateTimelineDates(startDate, endDate, val, tDays, isAdvanced, {
+      qStartDate,
+      qEndDate,
+      tStartDate,
+      tEndDate
+    });
+    if (calc) {
+      setQStartDate(calc.qStartDate);
+      setQEndDate(calc.qEndDate);
+      setTStartDate(calc.tStartDate);
+      setTEndDate(calc.tEndDate);
+    }
+  };
+
+  const handleTDaysChange = (val: number) => {
+    setTDays(val);
+    const calc = calculateTimelineDates(startDate, endDate, qDays, val, isAdvanced, {
+      qStartDate,
+      qEndDate,
+      tStartDate,
+      tEndDate
+    });
+    if (calc) {
+      setQStartDate(calc.qStartDate);
+      setQEndDate(calc.qEndDate);
+      setTStartDate(calc.tStartDate);
+      setTEndDate(calc.tEndDate);
+    }
+  };
+
+  const handleStartDateChange = (val: string) => {
+    setStartDate(val);
+    const calc = calculateTimelineDates(val, endDate, qDays, tDays, isAdvanced, {
+      qStartDate,
+      qEndDate,
+      tStartDate,
+      tEndDate
+    });
+    if (calc) {
+      setQStartDate(calc.qStartDate);
+      setQEndDate(calc.qEndDate);
+      setTStartDate(calc.tStartDate);
+      setTEndDate(calc.tEndDate);
+    }
+  };
+
+  const handleEndDateChange = (val: string) => {
+    setEndDate(val);
+    const calc = calculateTimelineDates(startDate, val, qDays, tDays, isAdvanced, {
+      qStartDate,
+      qEndDate,
+      tStartDate,
+      tEndDate
+    });
+    if (calc) {
+      setQStartDate(calc.qStartDate);
+      setQEndDate(calc.qEndDate);
+      setTStartDate(calc.tStartDate);
+      setTEndDate(calc.tEndDate);
+    }
+  };
+
+  const handleQStartDateChange = (val: string) => {
+    setQStartDate(val);
+    const days = getDaysBetween(val, qEndDate);
+    setQDays(days);
+  };
+
+  const handleQEndDateChange = (val: string) => {
+    setQEndDate(val);
+    const days = getDaysBetween(qStartDate, val);
+    setQDays(days);
+  };
+
+  const handleTStartDateChange = (val: string) => {
+    setTStartDate(val);
+    const days = getDaysBetween(val, tEndDate);
+    setTDays(days);
+  };
+
+  const handleTEndDateChange = (val: string) => {
+    setTEndDate(val);
+    const days = getDaysBetween(tStartDate, val);
+    setTDays(days);
+  };
+
+  const handleIsAdvancedChange = (checked: boolean) => {
+    setIsAdvanced(checked);
+    const calc = calculateTimelineDates(startDate, endDate, qDays, tDays, checked, {
+      qStartDate,
+      qEndDate,
+      tStartDate,
+      tEndDate
+    });
+    if (calc) {
+      setQStartDate(calc.qStartDate);
+      setQEndDate(calc.qEndDate);
+      setTStartDate(calc.tStartDate);
+      setTEndDate(calc.tEndDate);
+    }
+  };
+
   // 날짜 MM.DD 형식 포맷 헬퍼
   const formatDateStr = (date: Date) => {
     if (isNaN(date.getTime())) return '';
     return `${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
   };
 
+  const formatPreviewDate = (dateStr: string) => {
+    if (!dateStr) return '??.??';
+    const parts = dateStr.split('-');
+    if (parts.length !== 3) return dateStr;
+    return `${parts[1]}.${parts[2]}`;
+  };
+
+  const getReadingEndDate = () => {
+    const qs = parseDateString(qStartDate);
+    if (!qs || isNaN(qs.getTime())) return '';
+    qs.setDate(qs.getDate() - 1);
+    const year = qs.getFullYear();
+    const month = String(qs.getMonth() + 1).padStart(2, '0');
+    const day = String(qs.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   // 자동 흐름 일정 계산 함수
   const getTimelineDates = () => {
     try {
-      const start = new Date(startDate);
-      const end = new Date(endDate);
-      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return { reading: '', question: '', discussion: '' };
-      }
+      const calc = calculateTimelineDates(startDate, endDate, qDays, tDays, isAdvanced, {
+        qStartDate,
+        qEndDate,
+        tStartDate,
+        tEndDate
+      });
+      if (!calc) return { reading: '', question: '', discussion: '' };
 
-      if (isAdvanced) {
-        const qs = new Date(qStartDate);
-        const qe = new Date(qEndDate);
-        const ts = new Date(tStartDate);
-        const te = new Date(tEndDate);
+      const start = parseDateString(calc.startDate);
+      const end = parseDateString(calc.endDate);
+      const rEnd = parseDateString(calc.rEndDate);
+      const qStart = parseDateString(calc.qStartDate);
+      const qEnd = parseDateString(calc.qEndDate);
+      const tStart = parseDateString(calc.tStartDate);
+      const tEnd = parseDateString(calc.tEndDate);
 
-        let rEndStr = '';
-        if (!isNaN(qs.getTime())) {
-          const rEnd = new Date(qs);
-          rEnd.setDate(qs.getDate() - 1);
-          rEndStr = formatDateStr(rEnd);
-        }
-
-        return {
-          reading: `${formatDateStr(start)} ~ ${rEndStr || '?'}`,
-          question: `${isNaN(qs.getTime()) ? '?' : formatDateStr(qs)} ~ ${isNaN(qe.getTime()) ? '?' : formatDateStr(qe)}`,
-          discussion: `${isNaN(ts.getTime()) ? '?' : formatDateStr(ts)} ~ ${isNaN(te.getTime()) ? '?' : formatDateStr(te)}`
-        };
-      } else {
-        // 3단계: 생각 나누기 (종료일 기준 tDays일 전부터 종료일까지)
-        const tStart = new Date(end);
-        tStart.setDate(end.getDate() - tDays + 1);
-
-        // 2단계: 질문 정제 (종료일 기준 qDays일 전부터 토론 시작 전날까지)
-        const qStart = new Date(end);
-        qStart.setDate(end.getDate() - qDays + 1);
-        
-        const qEnd = new Date(tStart);
-        qEnd.setDate(tStart.getDate() - 1);
-
-        // 1단계: 책에 몰입 (시작일 ~ 질문 정제 시작 전날까지)
-        const rEnd = new Date(qStart);
-        rEnd.setDate(qStart.getDate() - 1);
-
-        return {
-          reading: `${formatDateStr(start)} ~ ${formatDateStr(rEnd)}`,
-          question: `${formatDateStr(qStart)} ~ ${formatDateStr(qEnd)}`,
-          discussion: `${formatDateStr(tStart)} ~ ${formatDateStr(end)}`
-        };
-      }
+      return {
+        reading: `${start ? formatDateStr(start) : ''} ~ ${rEnd ? formatDateStr(rEnd) : ''}`,
+        question: `${qStart ? formatDateStr(qStart) : ''} ~ ${qEnd ? formatDateStr(qEnd) : ''}`,
+        discussion: `${tStart ? formatDateStr(tStart) : ''} ~ ${tEnd ? formatDateStr(tEnd) : ''}`
+      };
     } catch {
-      return { reading: '05.01 ~ 05.14', question: '05.15 ~ 05.25', discussion: '05.26 ~ 05.31' };
+      return { reading: '06.01 ~ 06.24', question: '06.25 ~ 06.27', discussion: '06.28 ~ 06.30' };
     }
   };
-
-  // 자동 계산 값을 수동 입력 필드에도 기본값으로 동기화 (isAdvanced 가 꺼져 있을 때만)
-  useEffect(() => {
-    if (!isAdvanced) {
-      try {
-        const start = new Date(startDate);
-        const end = new Date(endDate);
-        if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
-          const tStart = new Date(end);
-          tStart.setDate(end.getDate() - tDays + 1);
-
-          const qStart = new Date(end);
-          qStart.setDate(end.getDate() - qDays + 1);
-          
-          const qEnd = new Date(tStart);
-          qEnd.setDate(tStart.getDate() - 1);
-
-          const toYmd = (d: Date) => {
-            if (isNaN(d.getTime())) return '';
-            return d.toISOString().split('T')[0];
-          };
-
-          setQStartDate(toYmd(qStart));
-          setQEndDate(toYmd(qEnd));
-          setTStartDate(toYmd(tStart));
-          setTEndDate(toYmd(end));
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    }
-  }, [startDate, endDate, qDays, tDays, isAdvanced]);
 
   // 실시간 날짜 유효성 체크
   useEffect(() => {
@@ -321,26 +438,16 @@ export default function ClubSettingsPage() {
         return '읽기 시작일과 종료일을 올바르게 입력해 주세요.';
       }
 
-      // 1. 읽기 시작일은 읽기 종료일보다 이전이어야 함
       if (start >= end) {
         return '읽기 종료일은 시작일보다 뒤여야 해요.';
       }
 
       if (!isAdvanced) {
-        // 자동 설정값 유효성 체크
         const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1;
-        
-        // 질문 정리 기간 n일이 토론 기간 m일보다 커야 함
-        if (qDays <= tDays) {
-          return '질문 정리 기간은 토론 기간보다 길게 설정되어야 해요.';
-        }
-        
-        // 전체 읽기 기간보다 질문/토론 기간이 길면 안 됨
-        if (qDays > totalDays) {
-          return '전체 읽기 기간보다 질문/토론 기간이 길 수 없어요.';
+        if (qDays + tDays + 1 > totalDays) {
+          return '전체 독서 일정보다 토론 주제 선정 및 토론 기간의 합이 길 수 없습니다.';
         }
       } else {
-        // 수동 설정 유효성 체크
         const qs = new Date(qStartDate);
         const qe = new Date(qEndDate);
         const ts = new Date(tStartDate);
@@ -350,29 +457,24 @@ export default function ClubSettingsPage() {
           return '모든 세부 일정을 올바르게 입력해 주세요.';
         }
 
-        // 2. 질문 모집 시작일은 읽기 시작일 이후여야 함
         if (qs < start) {
-          return '질문 모집 시작일은 전체 읽기 시작일 이후여야 해요.';
+          return '토론 주제 선정 시작일은 전체 읽기 시작일 이후여야 해요.';
         }
 
-        // 질문 모집 시작일이 종료일보다 이전이어야 함
         if (qs > qe) {
-          return '질문 모집 종료일은 시작일보다 뒤여야 해요.';
+          return '토론 주제 선정 종료일은 시작일보다 뒤여야 해요.';
         }
 
-        // 3. 질문 모집 종료일은 토론 시작일보다 이전이어야 함
         if (qe >= ts) {
-          return '토론 시작일은 질문 모집 종료일 이후여야 해요.';
+          return '토론 시작일은 토론 주제 선정 종료일 이후여야 해요.';
         }
 
-        // 4. 토론 시작일은 토론 종료일보다 이전이어야 함
         if (ts >= te) {
           return '토론 종료일은 시작일보다 뒤여야 해요.';
         }
 
-        // 5. 토론 종료일은 읽기 종료일과 같거나 이전이어야 함
-        if (te > end) {
-          return '토론 종료일은 전체 읽기 종료일을 넘길 수 없어요.';
+        if (te >= end) {
+          return '토론 종료일은 결산일(전체 종료일) 이전이어야 해요.';
         }
       }
 
@@ -781,16 +883,30 @@ export default function ClubSettingsPage() {
     setIsSaving(true);
 
     try {
-      // DB stage mapping
-      let dbStage: 'reading' | 'question' | 'discussion' | 'recap' = 'reading';
-      if (stage === 'question_collecting') dbStage = 'question';
-      else if (stage === 'discussion') dbStage = 'discussion';
-      else if (stage === 'archiving') dbStage = 'recap';
-
       // timeline range assembly
       const timelineReading = `${startDate}~${endDate}`;
       const timelineQuestion = qStartDate && qEndDate ? `${qStartDate}~${qEndDate}` : null;
       const timelineDiscussion = tStartDate && tEndDate ? `${tStartDate}~${tEndDate}` : null;
+
+      // Calculate stage based on dates
+      const calculated = getStageByDates(timelineReading, timelineQuestion, timelineDiscussion);
+      
+      // DB stage mapping
+      let dbStage: 'reading' | 'question' | 'discussion' | 'recap' = 'reading';
+      let uiStage: 'reading' | 'question_collecting' | 'discussion' | 'archiving' = 'reading';
+
+      if (calculated === 'question_collecting') {
+        dbStage = 'question';
+        uiStage = 'question_collecting';
+      } else if (calculated === 'discussion') {
+        dbStage = 'discussion';
+        uiStage = 'discussion';
+      } else if (calculated === 'archiving' || calculated === 'archived_recap') {
+        dbStage = 'recap';
+        uiStage = 'archiving';
+      }
+
+      setStage(uiStage);
 
       // API Call
       await mockApi.clubs.updateMonthlyBook(activeClub.id, {
@@ -804,7 +920,7 @@ export default function ClubSettingsPage() {
       localStorage.setItem(`bookclub_end_date_${activeClub.id}`, endDate);
       localStorage.setItem(`bookclub_q_days_${activeClub.id}`, String(qDays));
       localStorage.setItem(`bookclub_t_days_${activeClub.id}`, String(tDays));
-      localStorage.setItem(`bookclub_mock_club_stage_${activeClub.id}`, stage);
+      localStorage.setItem(`bookclub_mock_club_stage_${activeClub.id}`, uiStage);
       localStorage.setItem(`bookclub_is_advanced_${activeClub.id}`, String(isAdvanced));
       
       localStorage.setItem(`bookclub_q_start_date_${activeClub.id}`, qStartDate);
@@ -1303,17 +1419,17 @@ export default function ClubSettingsPage() {
                   <input 
                     type="date"
                     value={startDate}
-                    onChange={(e) => setStartDate(e.target.value)}
+                    onChange={(e) => handleStartDateChange(e.target.value)}
                     className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground"
                     required
                   />
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-[8px] font-black text-foreground/45 uppercase">읽기 종료일</label>
+                  <label className="text-[8px] font-black text-foreground/45 uppercase">결산일 (종료일)</label>
                   <input 
                     type="date"
                     value={endDate}
-                    onChange={(e) => setEndDate(e.target.value)}
+                    onChange={(e) => handleEndDateChange(e.target.value)}
                     className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground"
                     required
                   />
@@ -1321,76 +1437,86 @@ export default function ClubSettingsPage() {
               </div>
             </div>
 
-            {/* SECTION 3: 자동 흐름 설정 */}
+            {/* SECTION 3: 일정 설정 */}
             <div className="bg-background border border-card-border rounded-xl p-3.5 flex flex-col gap-3">
-              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">자동 흐름 설정</span>
+              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">일정 설정</span>
               
               <div className="grid grid-cols-2 gap-3.5">
                 <div className="flex flex-col gap-1">
-                  <label className="text-[8px] font-black text-foreground/45 uppercase">질문 정제 기간</label>
+                  <label className="text-[8px] font-black text-foreground/45 uppercase">토론 주제 선정 기간</label>
                   <div className="flex items-center gap-1 bg-card-bg border border-card-border rounded-lg px-2.5 py-1">
-                    <span className="text-[9px] text-foreground/40 font-bold">종료</span>
+                    <span className="text-[9px] text-foreground/40 font-bold">토론 전</span>
                     <input 
                       type="number"
                       value={qDays}
-                      onChange={(e) => setQDays(Math.max(1, Number(e.target.value)))}
+                      onChange={(e) => handleQDaysChange(Math.max(1, Number(e.target.value)))}
                       className="w-10 bg-transparent text-[10px] font-extrabold focus:outline-none text-center text-foreground"
                       min={1}
                       required
                     />
-                    <span className="text-[9px] text-foreground/50 font-bold">일 전 시작</span>
+                    <span className="text-[9px] text-foreground/50 font-bold">일간</span>
                   </div>
                 </div>
                 <div className="flex flex-col gap-1">
-                  <label className="text-[8px] font-black text-foreground/45 uppercase">생각 나누기 기간</label>
+                  <label className="text-[8px] font-black text-foreground/45 uppercase">토론 기간</label>
                   <div className="flex items-center gap-1 bg-card-bg border border-card-border rounded-lg px-2.5 py-1">
-                    <span className="text-[9px] text-foreground/40 font-bold">종료</span>
+                    <span className="text-[9px] text-foreground/40 font-bold">결산 전</span>
                     <input 
                       type="number"
                       value={tDays}
-                      onChange={(e) => setTDays(Math.max(1, Number(e.target.value)))}
+                      onChange={(e) => handleTDaysChange(Math.max(1, Number(e.target.value)))}
                       className="w-10 bg-transparent text-[10px] font-extrabold focus:outline-none text-center text-foreground"
                       min={1}
                       required
                     />
-                    <span className="text-[9px] text-foreground/50 font-bold">일 전 시작</span>
+                    <span className="text-[9px] text-foreground/50 font-bold">일간</span>
                   </div>
                 </div>
               </div>
 
-              <span className="text-[8px] text-foreground/45 leading-relaxed mt-0.5">
-                * 읽기 종료일을 기준으로 사색 질문 수집 및 토론 일정의 흐름이 자동 생성됩니다.
-              </span>
-            </div>
-
-            {/* SECTION 4: 현재 진행 단계 변경 */}
-            <div className="bg-background border border-card-border rounded-xl p-3 flex flex-col gap-2.5">
-              <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">현재 진행 단계</span>
-              
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { value: 'reading', label: '1. 책에 몰입' },
-                  { value: 'question_collecting', label: '2. 이야기 씨앗 고르기' },
-                  { value: 'discussion', label: '3. 생각 나누기' },
-                  { value: 'archiving', label: '4. 결산 준비' }
-                ].map((item) => (
-                  <button
-                    type="button"
-                    key={item.value}
-                    onClick={() => setStage(item.value as any)}
-                    className={`py-2 px-2.5 rounded-xl text-[10px] font-black text-center transition-all cursor-pointer ${
-                      stage === item.value
-                        ? 'bg-sage-medium text-white shadow-xs'
-                        : 'bg-card-bg border border-card-border text-foreground/55 hover:bg-sage-light/25'
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+              {/* 동적 예상 일정 미리보기 영역 */}
+              <div className="bg-foreground/5 rounded-lg p-3 flex flex-col gap-2 mt-0.5 text-left border border-card-border/40">
+                <span className="text-[8.5px] font-black text-sage-dark leading-none flex items-center gap-1 uppercase tracking-wider">
+                  📅 예상 일정 미리보기
+                </span>
+                <div className="flex flex-col gap-2.5 mt-1.5 pl-1.5 border-l border-sage-medium/30">
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-extrabold text-foreground/75 leading-none flex items-center gap-1">
+                      📖 책 읽기
+                    </span>
+                    <span className="text-[8px] font-bold text-foreground/45 mt-0.5">
+                      {formatPreviewDate(startDate)} ~ {formatPreviewDate(getReadingEndDate())}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-extrabold text-foreground/75 leading-none flex items-center gap-1">
+                      🗳️ 토론 주제 선정
+                    </span>
+                    <span className="text-[8px] font-bold text-foreground/45 mt-0.5">
+                      {formatPreviewDate(qStartDate)} ~ {formatPreviewDate(qEndDate)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-extrabold text-foreground/75 leading-none flex items-center gap-1">
+                      💬 토론
+                    </span>
+                    <span className="text-[8px] font-bold text-foreground/45 mt-0.5">
+                      {formatPreviewDate(tStartDate)} ~ {formatPreviewDate(tEndDate)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-extrabold text-foreground/75 leading-none flex items-center gap-1">
+                      🌙 결산
+                    </span>
+                    <span className="text-[8px] font-bold text-foreground/45 mt-0.5">
+                      {formatPreviewDate(endDate)}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* SECTION 5: 고급 설정 (세부 일정 수동 조율) */}
+            {/* 수동 진행 단계 변경 UI가 삭제되고, 고급 설정(세부 일정 수동 조율)으로 이어짐 */}
             <div className="border border-card-border/60 rounded-xl p-3.5 flex flex-col gap-2.5 bg-background/40 transition-all duration-300">
               <div className="flex justify-between items-center">
                 <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">고급 설정</span>
@@ -1399,7 +1525,7 @@ export default function ClubSettingsPage() {
                   <input 
                     type="checkbox"
                     checked={isAdvanced}
-                    onChange={(e) => setIsAdvanced(e.target.checked)}
+                    onChange={(e) => handleIsAdvancedChange(e.target.checked)}
                     className="w-3.5 h-3.5 border border-card-border rounded text-sage-medium focus:ring-sage-medium cursor-pointer"
                   />
                 </label>
@@ -1411,21 +1537,21 @@ export default function ClubSettingsPage() {
               }`}>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex flex-col gap-1">
-                    <label className="text-[8px] font-black text-foreground/45 uppercase">질문 모집 시작일</label>
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">토론 주제 선정 시작일</label>
                     <input 
                       type="date"
                       value={qStartDate}
-                      onChange={(e) => setQStartDate(e.target.value)}
+                      onChange={(e) => handleQStartDateChange(e.target.value)}
                       className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
                       required
                     />
                   </div>
                   <div className="flex flex-col gap-1">
-                    <label className="text-[8px] font-black text-foreground/45 uppercase">질문 모집 종료일</label>
+                    <label className="text-[8px] font-black text-foreground/45 uppercase">토론 주제 선정 종료일</label>
                     <input 
                       type="date"
                       value={qEndDate}
-                      onChange={(e) => setQEndDate(e.target.value)}
+                      onChange={(e) => handleQEndDateChange(e.target.value)}
                       className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
                       required
                     />
@@ -1435,7 +1561,7 @@ export default function ClubSettingsPage() {
                     <input 
                       type="date"
                       value={tStartDate}
-                      onChange={(e) => setTStartDate(e.target.value)}
+                      onChange={(e) => handleTStartDateChange(e.target.value)}
                       className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
                       required
                     />
@@ -1445,14 +1571,14 @@ export default function ClubSettingsPage() {
                     <input 
                       type="date"
                       value={tEndDate}
-                      onChange={(e) => setTEndDate(e.target.value)}
+                      onChange={(e) => handleTEndDateChange(e.target.value)}
                       className="px-2.5 py-1.5 bg-card-bg border border-card-border rounded-lg text-[10px] font-extrabold focus:outline-none focus:border-sage-medium text-foreground w-full"
                       required
                     />
                   </div>
                 </div>
                 <p className="text-[8px] text-foreground/40 leading-relaxed mt-2.5">
-                  * 세부 일정 직접 설정을 활성화하시면 질문 모집 및 토론의 시작/종료일을 커스텀하게 입력하실 수 있습니다.
+                  * 세부 일정 직접 설정을 활성화하시면 토론 주제 선정 및 토론의 시작/종료일을 커스텀하게 입력하실 수 있습니다.
                 </p>
               </div>
             </div>

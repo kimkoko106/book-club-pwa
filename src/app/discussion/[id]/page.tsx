@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, use } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi, DiscussionQuestion, DiscussionComment } from '../../../lib/supabase';
+import { mockApi, DiscussionQuestion, DiscussionComment, getStageByDates } from '../../../lib/supabase';
 import Navigation from '../../../components/Navigation';
 import SpoilerWarningModal from '../../../components/SpoilerWarningModal';
 import { ArrowLeft, MessageSquare, Send, Calendar, Layers } from 'lucide-react';
@@ -52,10 +52,13 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
         if (q.club_id) {
           const mb = await mockApi.clubs.getMonthlyBook(q.club_id);
           if (mb) {
-            let uiStage = 'reading';
-            if (mb.stage === 'question') uiStage = 'question_collecting';
-            else if (mb.stage === 'discussion') uiStage = 'discussion';
-            else if (mb.stage === 'recap') uiStage = 'archiving';
+            const calculatedStage = getStageByDates(
+              mb.timeline_reading,
+              mb.timeline_question,
+              mb.timeline_discussion
+            );
+            // 토론방에서는 archived_recap(결산 유예) 단계를 결산 화면(archiving)과 동일하게 봅니다.
+            const uiStage = calculatedStage === 'archived_recap' ? 'archiving' : calculatedStage;
             setStageParam(uiStage);
           }
         }
@@ -93,6 +96,15 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
     e.preventDefault();
     if (!currentUser || !newCommentContent.trim()) return;
 
+    if (stageParam !== 'discussion') {
+      if (stageParam === 'reading' || stageParam === 'question_collecting') {
+        setActionError('질문이 아직 선정되기 전입니다. 댓글 토론은 3단계(토론 진행) 기간에 활성화됩니다.');
+      } else {
+        setActionError('독서 모임이 결산 완료되어 댓글 작성이 마감되었습니다.');
+      }
+      return;
+    }
+
     if (newCommentContent.length > 1000) {
       setActionError('생각은 1000자 이내로 적어주세요.');
       return;
@@ -125,6 +137,11 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
   const handleUpdateComment = async (commentId: string) => {
     if (!editingContent.trim()) return;
 
+    if (stageParam !== 'discussion') {
+      setActionError('토론 진행 단계에서만 댓글 수정/삭제가 가능합니다.');
+      return;
+    }
+
     if (editingContent.length > 1000) {
       setActionError('생각은 1000자 이내로 적어주세요.');
       return;
@@ -151,6 +168,11 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
 
   // 댓글 삭제 핸들러
   const handleDeleteComment = async (commentId: string) => {
+    if (stageParam !== 'discussion') {
+      setActionError('토론 진행 단계에서만 댓글 수정/삭제가 가능합니다.');
+      return;
+    }
+
     const hasConfirmed = window.confirm('생각 기록을 삭제할까요?');
     if (!hasConfirmed) return;
 
@@ -240,7 +262,7 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
             <h2 className="text-base font-extrabold text-foreground">토론이 아직 시작되지 않았습니다</h2>
             <p className="text-xs text-foreground/50 leading-relaxed max-w-[280px]">
               제안된 질문 [&ldquo;{question.content}&rdquo;]은 현재 토론 준비실에 보관되어 있습니다.<br />
-              정식 토론은 5월 24일부터 열립니다.
+              정식 토론 기간이 시작되면 대화방이 열립니다.
             </p>
           </div>
 
@@ -448,7 +470,11 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
           <div className="bg-sage-light/10 border border-sage-light/40 rounded-2xl p-4 text-center mt-auto flex flex-col gap-1 shadow-sm">
             <span className="text-[10px] font-bold text-sage-dark uppercase tracking-wider">알림</span>
             <p className="text-[11px] font-semibold text-foreground/50 leading-relaxed">
-              지금은 기록을 돌아보는 시간입니다. 생각 나누기는 끝이 났지만, 남겨진 흔적들을 천천히 음미해보세요. 🌙
+              {stageParam === 'reading' || stageParam === 'question_collecting' ? (
+                '질문이 아직 선정되기 전입니다. 댓글 토론은 3단계(토론 진행) 기간에 활성화됩니다. 🌱'
+              ) : (
+                '독서 모임이 결산 완료되어 댓글 작성이 마감되었습니다. 남겨진 흔적들을 천천히 음미해보세요. 🌙'
+              )}
             </p>
           </div>
         )}
