@@ -268,7 +268,7 @@ export default function NextBookCandidatePage() {
         } else {
           // 결산이 이미 완료되었거나 없는 경우 일반 확인창 노출
           setIsSelecting(false);
-          const confirmChoice = confirm(`[${cand.title}] 도서를 이번 달 독서모임 공유도서로 선정하시겠습니까?\n진행도가 0페이지로 초기화됩니다.`);
+          const confirmChoice = confirm(`[${cand.title}] 도서를 현재 진행중인 공유도서로 선정하시겠습니까?\n진행도가 0페이지로 초기화됩니다.`);
           if (!confirmChoice) return;
           setIsSelecting(true);
         }
@@ -276,8 +276,8 @@ export default function NextBookCandidatePage() {
         console.warn('현재 도서 상태 조회 실패:', err);
       }
     } else {
-      // 다음 달 예정 도서 선정 확인창
-      const confirmChoice = confirm(`[${cand.title}] 도서를 다음 달 예정 도서로 선정하시겠습니까?`);
+      // 다음 예정 도서 선정 확인창
+      const confirmChoice = confirm(`[${cand.title}] 도서를 다음 예정 공유도서로 선정하시겠습니까?`);
       if (!confirmChoice) return;
       setIsSelecting(true);
     }
@@ -298,18 +298,18 @@ export default function NextBookCandidatePage() {
       }, targetType);
 
       if (targetType === 'next') {
-        alert(`[${cand.title}] 도서가 다음 달 예정 책으로 선정되었어요. 🌱`);
+        alert(`[${cand.title}] 도서가 다음 예정 공유도서로 선정되었어요. 🌱`);
       } else {
-        alert(`[${cand.title}] 도서가 이번 달 공유책으로 선정되었어요. ✨`);
+        alert(`[${cand.title}] 도서가 현재 진행중인 공유도서로 선정되었어요. ✨`);
       }
       router.push('/club');
     } catch (err: any) {
       console.warn('[Candidate] 도서 선정 에러:', err);
       let errMsg = '도서 선정 처리에 실패했습니다. 잠시 후 다시 시도해 주세요.';
-      if (err.message?.includes('이미 이번 달 공유책이에요')) {
-        errMsg = '이미 이번 달 공유책이에요.';
-      } else if (err.message?.includes('이미 다음 달 예정 책이에요')) {
-        errMsg = '이미 다음 달 예정 책이에요.';
+      if (err.message?.includes('이미 현재 진행중인 공유도서예요') || err.message?.includes('이미 이번 달 공유책이에요')) {
+        errMsg = '이미 현재 진행중인 공유도서예요.';
+      } else if (err.message?.includes('이미 다음 예정 공유도서예요') || err.message?.includes('이미 다음 달 예정 책이에요')) {
+        errMsg = '이미 다음 예정 공유도서예요.';
       }
       setSelectErrorMsg(errMsg);
       window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -356,7 +356,7 @@ export default function NextBookCandidatePage() {
           누군가의 책장에서 다음 이야기가 건너옵니다.
         </h2>
         <p className="text-[10px] text-foreground/45 font-medium leading-relaxed max-w-[340px] mx-auto">
-          다음 달 함께 읽고 싶은 이야기들을 조용히 모아두는 공간입니다. 서로의 책장을 건너다보며 끌리는 흐름을 꺼내어 보세요.
+          다음 예정 공유도서로 함께 읽고 싶은 이야기들을 조용히 모아두는 공간입니다. 서로의 책장을 건너다보며 끌리는 흐름을 꺼내어 보세요.
         </p>
       </div>
 
@@ -519,14 +519,14 @@ export default function NextBookCandidatePage() {
                       disabled={isSelecting}
                       className="px-2.5 py-1.5 border border-sage-medium text-sage-dark hover:bg-sage-medium hover:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
                     >
-                      {isSelecting ? '선정 중...' : '이번 달 공유책 선정'}
+                      {isSelecting ? '선정 중...' : '현재 진행중인 공유도서 선정'}
                     </button>
                     <button
                       onClick={() => handleSelectAsNextBook(cand, 'next')}
                       disabled={isSelecting}
                       className="px-2.5 py-1.5 border border-sage-dark/60 text-sage-dark/85 hover:bg-sage-dark/80 hover:text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-[9px] font-black transition-all cursor-pointer shadow-xs"
                     >
-                      {isSelecting ? '선정 중...' : '다음 달 예정책 선정'}
+                      {isSelecting ? '선정 중...' : '다음 예정 공유도서 선정'}
                     </button>
                   </div>
                 )}
@@ -549,7 +549,7 @@ export default function NextBookCandidatePage() {
             <div className="flex justify-between items-center">
               <div className="flex flex-col">
                 <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">책장에서 건네는 이야기</span>
-                <h3 className="text-xs font-black text-foreground mt-0.5">다음 달 함께 읽을 책 추천</h3>
+                <h3 className="text-xs font-black text-foreground mt-0.5">다음 예정 공유도서 추천</h3>
               </div>
               <button 
                 type="button"

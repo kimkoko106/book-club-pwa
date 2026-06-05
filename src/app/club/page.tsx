@@ -26,6 +26,8 @@ export default function ClubHubPage() {
   const [showRecapGraceCard, setShowRecapGraceCard] = useState(false);
   const [prevMonthlyBookId, setPrevMonthlyBookId] = useState<string | null>(null);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
+  const [nextBook, setNextBook] = useState<Book | null>(null);
+  const [nextMonthlyBook, setNextMonthlyBook] = useState<any | null>(null);
   const [members, setMembers] = useState<UserBookProgress[]>([]);
   const [inviteCodeInput, setInviteCodeInput] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -62,8 +64,18 @@ export default function ClubHubPage() {
   // 모임 데이터 로드 함수
   const loadClubData = useCallback(async (userId: string, clubId: string) => {
     try {
-      const book = await mockApi.books.getByClub(clubId);
+      const monthlyBook = await mockApi.clubs.getMonthlyBook(clubId);
+      const book = monthlyBook ? monthlyBook.books : null;
       setActiveBook(book);
+
+      const nextMb = await mockApi.clubs.getNextMonthlyBook(clubId);
+      if (nextMb) {
+        setNextMonthlyBook(nextMb);
+        setNextBook(nextMb.books);
+      } else {
+        setNextMonthlyBook(null);
+        setNextBook(null);
+      }
 
       if (book) {
         // 멤버 목록 및 각 진행 현황 로드 (멤버 프로필 포함)
@@ -71,7 +83,6 @@ export default function ClubHubPage() {
         setMembers(progresses);
 
         // 현재 모임의 단계를 다시 조회하여 'archiving' 단계인지 확인 및 recap 데이터 로드
-        const monthlyBook = await mockApi.clubs.getMonthlyBook(clubId);
         if (monthlyBook) {
           const calculatedStage = getStageByDates(
             monthlyBook.timeline_reading,
@@ -108,6 +119,14 @@ export default function ClubHubPage() {
 
           // 독서 흐름 및 타임라인 Supabase 연동 조회
           const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
+          const nextMb = await mockApi.clubs.getNextMonthlyBook(club.id);
+          if (nextMb) {
+            setNextMonthlyBook(nextMb);
+            setNextBook(nextMb.books);
+          } else {
+            setNextMonthlyBook(null);
+            setNextBook(null);
+          }
           let currentUiStage = 'reading';
           if (monthlyBook) {
             const calculatedStage = getStageByDates(
@@ -193,7 +212,7 @@ export default function ClubHubPage() {
           }
 
           // 먼저 기본 로드 후, 결산 상태이면 요약 데이터를 결합적으로 로드
-          const book = await mockApi.books.getByClub(club.id);
+          const book = monthlyBook ? monthlyBook.books : null;
           setActiveBook(book);
 
           if (book) {
@@ -370,42 +389,49 @@ export default function ClubHubPage() {
             /* 결산 회고 단계 전용 독서 노트 뷰 */
             <div className="flex flex-col gap-4">
 
-              {/* [1] 이번 달 함께 읽은 책 카드 (기록 표지) */}
+              {/* [1] 현재 공유도서 완료 카드 */}
               {activeBook && (
-                <div className="bg-card-bg border border-card-border rounded-3xl p-5 flex gap-4.5 shadow-sm items-center relative overflow-hidden">
+                <div className="bg-card-bg border border-card-border rounded-3xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
                   <div className="absolute top-0 right-0 w-24 h-24 bg-sage-light/20 rounded-full translate-x-10 -translate-y-10 -z-10" />
-                  {activeBook.cover_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={activeBook.cover_url}
-                      alt={activeBook.title}
-                      className="w-16 h-22 rounded-xl object-cover shadow border border-card-border/60 flex-shrink-0"
-                    />
-                  ) : (
-                    <div className="w-16 h-22 rounded-xl bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border/70 flex flex-col justify-between py-3 px-1.5 shadow flex-shrink-0 text-center select-none relative overflow-hidden">
-                      <div className="absolute top-0 left-0 w-1.5 h-full bg-sage-dark/10" />
-                      <span className="text-[10px] font-black text-sage-dark leading-tight line-clamp-2 w-full mt-1 px-1">
-                        {activeBook.title}
-                      </span>
-                      <span className="text-[8px] font-extrabold text-sage-medium/95 truncate w-full px-1">
-                        {activeBook.author || '지은이 미상'}
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex gap-4.5 items-center">
+                    {activeBook.cover_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={activeBook.cover_url}
+                        alt={activeBook.title}
+                        className="w-16 h-22 rounded-xl object-cover shadow border border-card-border/60 flex-shrink-0"
+                      />
+                    ) : (
+                      <div className="w-16 h-22 rounded-xl bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border/70 flex flex-col justify-between py-3 px-1.5 shadow flex-shrink-0 text-center select-none relative overflow-hidden">
+                        <div className="absolute top-0 left-0 w-1.5 h-full bg-sage-dark/10" />
+                        <span className="text-[10px] font-black text-sage-dark leading-tight line-clamp-2 w-full mt-1 px-1">
+                          {activeBook.title}
+                        </span>
+                        <span className="text-[8px] font-extrabold text-sage-medium/95 truncate w-full px-1">
+                          {activeBook.author || '지은이 미상'}
+                        </span>
+                      </div>
+                    )}
 
-                  <div className="flex flex-col gap-1.5 min-w-0">
-                    <span className="text-[8px] font-black text-sage-dark bg-sage-light/75 px-2 py-0.5 rounded-md leading-none w-fit">
-                      이번 달 독서 여정 마침 🌙
-                    </span>
-                    <h2 className="text-sm font-black text-foreground leading-tight truncate">
-                      {activeBook.title}
-                    </h2>
-                    <p className="text-[10.5px] text-foreground/45 font-bold leading-none mt-0.5">
-                      {activeBook.author} 저
-                    </p>
-                    <p className="text-[9.5px] text-foreground/35 font-semibold leading-none mt-1">
-                      함께 읽은 동반자 {members.length}명
-                    </p>
+                    <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+                      <span className="text-[8px] font-black text-sage-dark bg-sage-light/75 px-2 py-0.5 rounded-md leading-none w-fit">
+                        현재 공유도서 독서 여정 마침 🌙
+                      </span>
+                      <h2 className="text-sm font-black text-foreground leading-tight truncate">
+                        {activeBook.title}
+                      </h2>
+                      <p className="text-[10.5px] text-foreground/45 font-bold leading-none mt-0.5">
+                        {activeBook.author} 저
+                      </p>
+                      <p className="text-[9.5px] text-foreground/35 font-semibold leading-none mt-1">
+                        함께 읽은 동반자 {members.length}명
+                      </p>
+                    </div>
+                  </div>
+                  <div className="h-px bg-card-border" />
+                  <div className="flex justify-between items-center bg-sage-light/25 border border-sage-light/65 px-4 py-2.5 rounded-2xl">
+                    <span className="text-[10px] font-black text-sage-dark">🏁 회차 종료 및 결산 진행중</span>
+                    <span className="text-[9px] font-black bg-sage-medium text-white px-2 py-0.5 rounded-lg">완독</span>
                   </div>
                 </div>
               )}
@@ -418,11 +444,11 @@ export default function ClubHubPage() {
                 </div>
                 <h3 className="text-xs font-black text-foreground">사색 에세이 큐레이션 준비 중</h3>
                 <p className="text-[10px] text-foreground/50 leading-relaxed font-semibold">
-                  우리 모임원들이 한 달간 정성껏 포개어 둔 생각의 조각들이 깊이 숙성되어 가고 있습니다. 조만간 한 편의 다정한 요약 에세이로 피어날 예정입니다. 조금만 기다려주세요. 🌙
+                  우리 모임원들이 회차 동안 정성껏 포개어 둔 생각의 조각들이 깊이 숙성되어 가고 있습니다. 조만간 한 편의 다정한 요약 에세이로 피어날 예정입니다. 조금만 기다려주세요. 🌙
                 </p>
               </div>
 
-              {/* [3] 이번 달 남겨진 질문들 & 사색 조각 (아코디언 회고 카드) */}
+              {/* [3] 이번 회차 남겨진 질문들 & 사색 조각 (아코디언 회고 카드) */}
               <div className="flex flex-col gap-3 mt-1">
                 <div className="flex items-center gap-2">
                   <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
@@ -432,7 +458,7 @@ export default function ClubHubPage() {
                 <div className="flex flex-col gap-3">
                   {recapQuestions.length === 0 ? (
                     <div className="bg-card-bg border border-card-border border-dashed rounded-2xl py-12 text-center text-xs text-foreground/30 font-medium">
-                      이번 달에는 선정된 사색 질문이 없습니다.
+                      이번 회차에는 선정된 사색 질문이 없습니다.
                     </div>
                   ) : (
                     recapQuestions.map((q, idx) => {
@@ -507,19 +533,45 @@ export default function ClubHubPage() {
                 </div>
               </div>
 
-              {/* [4] 다음 책으로 이어지는 흐름 (감성 칩 카드) */}
-              <div
-                onClick={() => router.push('/club/candidate')}
-                className="bg-background border border-card-border/80 hover:border-sage-medium rounded-2xl p-4 text-center shadow-xs cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 flex flex-col gap-1 group mt-2"
-              >
-                <span className="text-[8px] font-bold text-sage-dark uppercase tracking-widest group-hover:text-sage-medium transition-colors">새로운 이야기의 씨앗</span>
-                <p className="text-[11px] font-extrabold text-foreground/60 leading-relaxed group-hover:text-sage-dark transition-colors">
-                  다음 달 함께 읽을 책의 씨앗이 후보방에서 조용히 자라나고 있습니다. 🌱
-                </p>
-                <span className="text-[9px] font-black text-sage-medium/80 underline decoration-dotted mt-1 self-center">
-                  다음 후보방 구경하러 가기
-                </span>
-              </div>
+              {/* [4] 다음 책으로 이어지는 흐름 */}
+              {nextBook && nextMonthlyBook ? (
+                <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs mt-2">
+                  <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
+                    <span>다음 예정 공유도서 🌱</span>
+                    <span className="text-sage-dark font-black">
+                      {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                        const parts = d.trim().split('-');
+                        if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
+                        return d;
+                      }).join(' ~ ') : '일정 조율 중'}
+                    </span>
+                  </div>
+                  <div className="flex gap-3 items-center">
+                    {nextBook.cover_url ? (
+                      <img src={nextBook.cover_url} alt="Cover" className="w-10 h-14 rounded object-cover border border-card-border shadow-xs" />
+                    ) : (
+                      <div className="w-10 h-14 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold">📖</div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                      <span className="text-[10px] text-foreground/45 font-medium truncate mt-0.5">{nextBook.author}</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  onClick={() => router.push('/club/candidate')}
+                  className="bg-background border border-card-border/80 hover:border-sage-medium rounded-2xl p-4 text-center shadow-xs cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5 flex flex-col gap-1 group mt-2"
+                >
+                  <span className="text-[8px] font-bold text-sage-dark uppercase tracking-widest group-hover:text-sage-medium transition-colors">새로운 이야기의 씨앗</span>
+                  <p className="text-[11px] font-extrabold text-foreground/60 leading-relaxed group-hover:text-sage-dark transition-colors">
+                    다음 예정 공유도서로 함께 읽을 책의 씨앗이 후보방에서 조용히 자라나고 있습니다. 🌱
+                  </p>
+                  <span className="text-[9px] font-black text-sage-medium/80 underline decoration-dotted mt-1 self-center">
+                    다음 후보방 구경하러 가기
+                  </span>
+                </div>
+              )}
 
               {/* 방장 관리자용 메뉴 활성화 (결산 회고 단계에서도 관리기능 유지) */}
               {userRole === 'admin' && (
@@ -558,9 +610,9 @@ export default function ClubHubPage() {
                   <div className="flex flex-col gap-0.5">
                     <span className="text-[8px] font-black text-white/70 uppercase tracking-widest leading-none">지난 여정의 열매 🌙</span>
                     <h4 className="text-xs font-black flex items-center gap-1.5 text-white mt-1">
-                      지난 달 독서 결산 보기
+                      지난 공유도서 결산 보기
                     </h4>
-                    <p className="text-[9.5px] text-white/70 font-semibold leading-none mt-1">이전 달에 나눴던 아름다운 사색 조각과 회고록이 도착했어요.</p>
+                    <p className="text-[9.5px] text-white/70 font-semibold leading-none mt-1">지난 회차에 나눴던 아름다운 사색 조각과 회고록이 도착했어요.</p>
                   </div>
                   <span className="text-[9px] font-black bg-white/20 px-2.5 py-1 rounded-lg group-hover:bg-white/35 transition-all flex items-center gap-0.5 text-white">
                     열기
@@ -583,20 +635,21 @@ export default function ClubHubPage() {
               </div>
 
               {/* 2. 현재 읽는 책 & 독서 단계 카드 (간략형) */}
-              {activeBook && (
-                <div className="bg-card-bg border border-card-border rounded-2xl p-5 shadow-sm flex flex-col gap-4">
-                  <div className="flex justify-between items-center">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 bg-sage-light rounded-lg flex justify-center items-center text-sage-dark">
-                        <BookOpen size={14} />
+              {activeBook ? (
+                <div className="flex flex-col gap-3.5 w-full">
+                  <div className="bg-card-bg border border-card-border rounded-2xl p-5 shadow-sm flex flex-col gap-4">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 bg-sage-light rounded-lg flex justify-center items-center text-sage-dark">
+                          <BookOpen size={14} />
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[9px] font-bold text-foreground/40 uppercase">읽고 있는 책</span>
+                          <span className="text-xs font-extrabold text-foreground leading-none mt-0.5">{activeBook.title}</span>
+                        </div>
                       </div>
-                      <div className="flex flex-col">
-                        <span className="text-[9px] font-bold text-foreground/40 uppercase">읽고 있는 책</span>
-                        <span className="text-xs font-extrabold text-foreground leading-none mt-0.5">{activeBook.title}</span>
-                      </div>
+                      <span className="text-[10px] text-foreground/40 font-semibold">{activeBook.author}</span>
                     </div>
-                    <span className="text-[10px] text-foreground/40 font-semibold">{activeBook.author}</span>
-                  </div>
 
                   <div className="h-px bg-card-border" />
 
@@ -672,10 +725,84 @@ export default function ClubHubPage() {
                         {stage === 'reading' && '천천히 읽으며 질문을 남겨보세요. 마음에 와닿는 구절이나 질문을 등록하고 공감해보세요.'}
                         {stage === 'question_collecting' && '함께 오래 이야기할 토론 주제를 선정해요. 모인 질문 중 가장 나누고 싶은 주제를 골라주세요.'}
                         {stage === 'discussion' && '선정 질문으로 자유롭게 대화해요. 다른 멤버의 생각과 댓글을 나누며 깊이 소통합니다.'}
-                        {stage === 'archiving' && '이번 달 독서를 돌아봐요. 지난 여정의 기록들을 보며 따뜻하게 회고해보세요.'}
+                        {stage === 'archiving' && '현재 공유도서 독서를 돌아봐요. 지난 여정의 기록들을 보며 따뜻하게 회고해보세요.'}
                       </p>
                     </div>
                   </div>
+
+                  {nextBook && nextMonthlyBook && (
+                    <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs">
+                      <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
+                        <span>다음 예정 공유도서 🌱</span>
+                        <span className="text-sage-dark font-black">
+                          {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                            const parts = d.trim().split('-');
+                            if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
+                            return d;
+                          }).join(' ~ ') : '일정 조율 중'}
+                        </span>
+                      </div>
+                      <div className="flex gap-3 items-center">
+                        {nextBook.cover_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={nextBook.cover_url} alt="Cover" className="w-10 h-14 rounded object-cover border border-card-border shadow-xs" />
+                        ) : (
+                          <div className="w-10 h-14 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold">📖</div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                          <span className="text-[10px] text-foreground/45 font-medium truncate mt-0.5">{nextBook.author}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                </div>
+              ) : (
+                /* 새 공유책이 없는 경우 예외 상태 노출 */
+                <div className="flex flex-col gap-3.5 w-full">
+                  {nextBook && nextMonthlyBook ? (
+                    <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs">
+                      <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
+                        <span>다음 예정 공유도서 🌱</span>
+                        <span className="text-sage-dark font-black">
+                          {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                            const parts = d.trim().split('-');
+                            if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
+                            return d;
+                          }).join(' ~ ') : '일정 조율 중'}
+                        </span>
+                      </div>
+                      <div className="flex gap-3 items-center">
+                        {nextBook.cover_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={nextBook.cover_url} alt="Cover" className="w-10 h-14 rounded object-cover border border-card-border shadow-xs" />
+                        ) : (
+                          <div className="w-10 h-14 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold">📖</div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                          <span className="text-[10px] text-foreground/45 font-medium truncate mt-0.5">{nextBook.author}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-card-bg border border-card-border border-dashed rounded-2xl p-6.5 text-center flex flex-col items-center gap-3.5 shadow-sm">
+                      <div className="w-12 h-12 bg-sage-light/40 rounded-2xl flex justify-center items-center text-sage-dark shadow-inner">
+                        <BookOpen size={20} />
+                      </div>
+                      <div className="flex flex-col gap-1 px-1">
+                        <h4 className="text-xs font-extrabold text-foreground leading-snug">다음 공유책을 준비중입니다 📖</h4>
+                        <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">후보방에서 다음 책을 추천해보세요.</p>
+                      </div>
+                      <button
+                        onClick={() => router.push('/club/candidate')}
+                        className="px-4 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs transition-all cursor-pointer"
+                      >
+                        책 후보방으로 이동
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

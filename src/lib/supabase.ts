@@ -789,6 +789,307 @@ export const mockApi = {
     },
 
     getMonthlyBook: async (clubId: string): Promise<any | null> => {
+      const todayStr = getTodayYmd();
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('monthly_books')
+            .select(`
+              *,
+              books (
+                id,
+                title,
+                author,
+                total_pages,
+                cover_url,
+                created_at
+              )
+            `)
+            .eq('group_id', clubId);
+
+          if (error) throw error;
+          if (!data || data.length === 0) return null;
+
+          // 오늘 날짜가 start~end 범위에 들어가는 회차들 필터링
+          let candidates = data.filter(mb => {
+            // stage가 scheduled, archived 인 경우 제외.
+            // recap은 오늘이 종료일 이하(종료일 당일 포함)인 경우에만 허용
+            if (mb.stage === 'scheduled' || mb.stage === 'archived') return false;
+            if (!mb.timeline_reading) return false;
+
+            const { startDate, endDate } = getMbStartEndDates(mb);
+            if (!startDate || !endDate) return false;
+
+            if (mb.stage === 'recap' && todayStr > endDate) return false;
+
+            return todayStr >= startDate && todayStr <= endDate;
+          });
+
+          // 다음 회차는 이전 회차가 완전히 종료된 경우에만 활성화합니다.
+          candidates = candidates.filter(mb => {
+            const { startDate } = getMbStartEndDates(mb);
+            if (!startDate) return false;
+
+            const previousMbs = data.filter(other => {
+              if (other.id === mb.id) return false;
+              const { startDate: otherStart } = getMbStartEndDates(other);
+              if (!otherStart) return false;
+              return otherStart < startDate;
+            });
+
+            const hasUnfinishedPrevious = previousMbs.some(prev => {
+              const { endDate: prevEnd } = getMbStartEndDates(prev);
+              if (!prevEnd) return false;
+              return todayStr <= prevEnd;
+            });
+
+            return !hasUnfinishedPrevious;
+          });
+
+          if (candidates.length === 0) return null;
+
+          // 여러 개가 걸리면 시작일이 가장 빠른 회차 우선
+          candidates.sort((a, b) => {
+            const { startDate: aStart } = getMbStartEndDates(a);
+            const { startDate: bStart } = getMbStartEndDates(b);
+            if (aStart! < bStart!) return -1;
+            if (aStart! > bStart!) return 1;
+            const aTime = new Date(a.created_at || 0).getTime();
+            const bTime = new Date(b.created_at || 0).getTime();
+            return bTime - aTime;
+          });
+
+          return candidates[0];
+        } catch (err) {
+          console.error('[DB] getMonthlyBook 에러:', err);
+          return null;
+        }
+      }
+
+      // 로컬 Mock 모드
+      try {
+        const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+        const storedMb = localStorage.getItem(KEY_MONTHLY_BOOKS);
+        const mbList = storedMb ? JSON.parse(storedMb) : [];
+        const books = getStorageItem<Book>(KEY_BOOKS);
+        const matchedBook = books.find(b => b.club_id === clubId) || null;
+
+        if (mbList.length === 0 && matchedBook) {
+          const stage = localStorage.getItem(`bookclub_mock_club_stage_${clubId}`) || 'reading';
+          if (stage === 'scheduled') return null;
+
+          let dbStage = 'reading';
+          if (stage === 'question_collecting') dbStage = 'question';
+          else if (stage === 'discussion') dbStage = 'discussion';
+          else if (stage === 'archiving') dbStage = 'recap';
+
+          const timelineReading = localStorage.getItem(`bookclub_start_date_${clubId}`) && localStorage.getItem(`bookclub_end_date_${clubId}`)
+            ? `${localStorage.getItem(`bookclub_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_end_date_${clubId}`)}`
+            : `${todayStr}~${todayStr}`;
+
+          return {
+            id: 'monthly-mock-' + clubId,
+            group_id: clubId,
+            book_id: matchedBook.id,
+            month: todayStr.substring(0, 7),
+            stage: dbStage,
+            timeline_reading: timelineReading,
+            timeline_question: localStorage.getItem(`bookclub_q_start_date_${clubId}`) && localStorage.getItem(`bookclub_q_end_date_${clubId}`)
+              ? `${localStorage.getItem(`bookclub_q_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_q_end_date_${clubId}`)}`
+              : null,
+            timeline_discussion: localStorage.getItem(`bookclub_t_start_date_${clubId}`) && localStorage.getItem(`bookclub_t_end_date_${clubId}`)
+              ? `${localStorage.getItem(`bookclub_t_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_t_end_date_${clubId}`)}`
+              : null,
+            books: matchedBook
+          };
+        }
+
+        const filteredList = mbList.filter((mb: any) => mb.group_id === clubId);
+        let candidates = filteredList.filter((mb: any) => {
+          if (mb.stage === 'scheduled' || mb.stage === 'archived') return false;
+          if (!mb.timeline_reading) return false;
+
+          const { startDate, endDate } = getMbStartEndDates(mb);
+          if (!startDate || !endDate) return false;
+
+          if (mb.stage === 'recap' && todayStr > endDate) return false;
+
+          return todayStr >= startDate && todayStr <= endDate;
+        });
+
+        // 다음 회차는 이전 회차가 완전히 종료된 경우에만 활성화합니다.
+        candidates = candidates.filter((mb: any) => {
+          const { startDate } = getMbStartEndDates(mb);
+          if (!startDate) return false;
+
+          const previousMbs = filteredList.filter((other: any) => {
+            if (other.id === mb.id) return false;
+            const { startDate: otherStart } = getMbStartEndDates(other);
+            if (!otherStart) return false;
+            return otherStart < startDate;
+          });
+
+          const hasUnfinishedPrevious = previousMbs.some((prev: any) => {
+            const { endDate: prevEnd } = getMbStartEndDates(prev);
+            if (!prevEnd) return false;
+            return todayStr <= prevEnd;
+          });
+
+          return !hasUnfinishedPrevious;
+        });
+
+        if (candidates.length === 0) return null;
+
+        candidates.sort((a: any, b: any) => {
+          const { startDate: aStart } = getMbStartEndDates(a);
+          const { startDate: bStart } = getMbStartEndDates(b);
+          if (aStart! < bStart!) return -1;
+          if (aStart! > bStart!) return 1;
+          const aTime = new Date(a.created_at || 0).getTime();
+          const bTime = new Date(b.created_at || 0).getTime();
+          return bTime - aTime;
+        });
+
+        const activeMock = candidates[0];
+        const activeBook = books.find(b => b.id === activeMock.book_id) || matchedBook;
+        return {
+          ...activeMock,
+          books: activeBook
+        };
+      } catch (err) {
+        console.warn('Mock getMonthlyBook 에러:', err);
+        return null;
+      }
+    },
+    getNextMonthlyBook: async (clubId: string): Promise<any | null> => {
+      const todayStr = getTodayYmd();
+      if (!isMockMode && supabase) {
+        try {
+          const { data, error } = await supabase
+            .from('monthly_books')
+            .select(`
+              *,
+              books (
+                id,
+                title,
+                author,
+                total_pages,
+                cover_url,
+                created_at
+              )
+            `)
+            .eq('group_id', clubId);
+
+          if (error) throw error;
+          if (!data || data.length === 0) return null;
+
+          // 시작일이 오늘보다 미래이거나 stage가 scheduled인 유효 회차 필터링
+          const candidates = data.filter(mb => {
+            // book_id가 없거나 잘못된 빈 회차 제외
+            if (!mb.book_id || mb.book_id.trim() === '') return false;
+            // 결산/보관 회차 제외
+            if (mb.stage === 'recap' || mb.stage === 'archived') return false;
+
+            // stage가 scheduled인 경우 -> 미래 회차로 간주
+            if (mb.stage === 'scheduled') return true;
+
+            // 그 외의 경우 timeline_reading이 있고 시작일이 미래여야 함
+            if (!mb.timeline_reading) return false;
+            const { startDate } = getMbStartEndDates(mb);
+            if (!startDate) return false;
+            return startDate > todayStr;
+          });
+
+          if (candidates.length === 0) return null;
+
+          // 시작일이 가장 가까운 미래 회차 1건 (시작일 오름차순, scheduled 회차 최우선)
+          candidates.sort((a, b) => {
+            const { startDate: aStart } = getMbStartEndDates(a);
+            const { startDate: bStart } = getMbStartEndDates(b);
+            
+            // timeline_reading이 없는 scheduled 상태의 회차인 경우 startDate가 null이 됨
+            const aIsScheduled = a.stage === 'scheduled' || !a.timeline_reading;
+            const bIsScheduled = b.stage === 'scheduled' || !b.timeline_reading;
+
+            if (aIsScheduled && !bIsScheduled) return -1;
+            if (!aIsScheduled && bIsScheduled) return 1;
+            if (aIsScheduled && bIsScheduled) {
+              const aTime = new Date(a.created_at || 0).getTime();
+              const bTime = new Date(b.created_at || 0).getTime();
+              return bTime - aTime;
+            }
+
+            if (aStart! < bStart!) return -1;
+            if (aStart! > bStart!) return 1;
+            const aTime = new Date(a.created_at || 0).getTime();
+            const bTime = new Date(b.created_at || 0).getTime();
+            return bTime - aTime;
+          });
+
+          return candidates[0];
+        } catch (err) {
+          console.error('[DB] getNextMonthlyBook 에러:', err);
+          return null;
+        }
+      }
+
+      // 로컬 Mock 모드
+      try {
+        const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+        const storedMb = localStorage.getItem(KEY_MONTHLY_BOOKS);
+        const mbList = storedMb ? JSON.parse(storedMb) : [];
+        const books = getStorageItem<Book>(KEY_BOOKS);
+
+        const filteredList = mbList.filter((mb: any) => mb.group_id === clubId);
+        const candidates = filteredList.filter((mb: any) => {
+          if (!mb.book_id || mb.book_id.trim() === '') return false;
+          if (mb.stage === 'recap' || mb.stage === 'archived') return false;
+
+          if (mb.stage === 'scheduled') return true;
+
+          if (!mb.timeline_reading) return false;
+          const { startDate } = getMbStartEndDates(mb);
+          if (!startDate) return false;
+          return startDate > todayStr;
+        });
+
+        if (candidates.length === 0) return null;
+
+        candidates.sort((a: any, b: any) => {
+          const { startDate: aStart } = getMbStartEndDates(a);
+          const { startDate: bStart } = getMbStartEndDates(b);
+          
+          const aIsScheduled = a.stage === 'scheduled' || !a.timeline_reading;
+          const bIsScheduled = b.stage === 'scheduled' || !b.timeline_reading;
+
+          if (aIsScheduled && !bIsScheduled) return -1;
+          if (!aIsScheduled && bIsScheduled) return 1;
+          if (aIsScheduled && bIsScheduled) {
+            const aTime = new Date(a.created_at || 0).getTime();
+            const bTime = new Date(b.created_at || 0).getTime();
+            return bTime - aTime;
+          }
+
+          if (aStart! < bStart!) return -1;
+          if (aStart! > bStart!) return 1;
+          const aTime = new Date(a.created_at || 0).getTime();
+          const bTime = new Date(b.created_at || 0).getTime();
+          return bTime - aTime;
+        });
+
+        const nextMock = candidates[0];
+        const nextBook = books.find(b => b.id === nextMock.book_id) || null;
+        return {
+          ...nextMock,
+          books: nextBook
+        };
+      } catch (err) {
+        console.warn('Mock getNextMonthlyBook 에러:', err);
+        return null;
+      }
+    },
+
+    getAllMonthlyBooks: async (clubId: string): Promise<any[]> => {
       if (!isMockMode && supabase) {
         try {
           const { data, error } = await supabase
@@ -805,58 +1106,36 @@ export const mockApi = {
               )
             `)
             .eq('group_id', clubId)
-            .neq('stage', 'scheduled') // 다음 달 예정된 도서는 현재 도서에서 제외
-            .order('created_at', { ascending: false })
-            .limit(1);
+            .order('created_at', { ascending: false });
 
           if (error) throw error;
-          if (!data || data.length === 0) return null;
-          return data[0];
+          return data || [];
         } catch (err) {
-          console.error('[DB] getMonthlyBook 에러:', err);
-          return null;
+          console.error('[DB] getAllMonthlyBooks 에러:', err);
+          return [];
         }
       }
 
       // 로컬 Mock 모드
-      const stage = localStorage.getItem(`bookclub_mock_club_stage_${clubId}`) || 'reading';
-      if (stage === 'scheduled') {
-        // 예약 상태라면 현재 진행 중인 책이 없음
-        return null;
+      if (typeof window === 'undefined') return [];
+      try {
+        const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+        const stored = localStorage.getItem(KEY_MONTHLY_BOOKS);
+        const list = stored ? JSON.parse(stored) : [];
+        const books = getStorageItem<Book>(KEY_BOOKS);
+        
+        const clubList = list.filter((mb: any) => mb.group_id === clubId);
+        return clubList.map((mb: any) => {
+          const b = mb.books || books.find(item => item.id === mb.book_id) || { title: '제목 없음', author: '저자 미상', cover_url: '' };
+          return {
+            ...mb,
+            books: b
+          };
+        });
+      } catch (err) {
+        console.warn('Mock getAllMonthlyBooks 에러:', err);
+        return [];
       }
-
-      const books = getStorageItem<Book>(KEY_BOOKS);
-      const matchedBook = books.find(b => b.club_id === clubId) || null;
-      if (!matchedBook) return null;
-
-      let dbStage = 'reading';
-      if (stage === 'question_collecting') dbStage = 'question';
-      else if (stage === 'discussion') dbStage = 'discussion';
-      else if (stage === 'archiving') dbStage = 'recap';
-
-      const timelineReading = localStorage.getItem(`bookclub_start_date_${clubId}`) && localStorage.getItem(`bookclub_end_date_${clubId}`)
-        ? `${localStorage.getItem(`bookclub_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_end_date_${clubId}`)}`
-        : '2026-05-01~2026-05-14';
-      
-      const timelineQuestion = localStorage.getItem(`bookclub_q_start_date_${clubId}`) && localStorage.getItem(`bookclub_q_end_date_${clubId}`)
-        ? `${localStorage.getItem(`bookclub_q_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_q_end_date_${clubId}`)}`
-        : null;
-
-      const timelineDiscussion = localStorage.getItem(`bookclub_t_start_date_${clubId}`) && localStorage.getItem(`bookclub_t_end_date_${clubId}`)
-        ? `${localStorage.getItem(`bookclub_t_start_date_${clubId}`)}~${localStorage.getItem(`bookclub_t_end_date_${clubId}`)}`
-        : null;
-
-      return {
-        id: 'monthly-mock-' + clubId,
-        group_id: clubId,
-        book_id: matchedBook.id,
-        month: '2026-05',
-        stage: dbStage,
-        timeline_reading: timelineReading,
-        timeline_question: timelineQuestion,
-        timeline_discussion: timelineDiscussion,
-        books: matchedBook
-      };
     },
 
     updateMonthlyBook: async (
@@ -869,22 +1148,101 @@ export const mockApi = {
         timeline_discussion?: string | null;
       }
     ): Promise<void> => {
+      // 겹침 일정 충돌 실시간 방어 검증
+      if (data.timeline_reading) {
+        const parts = data.timeline_reading.split('~');
+        if (parts.length === 2) {
+          const newStart = parseDateString(parts[0])?.toISOString().split('T')[0];
+          const newEnd = parseDateString(parts[1])?.toISOString().split('T')[0];
+
+          if (newStart && newEnd) {
+            // 다른 회차들 조회
+            const allMbs = await mockApi.clubs.getAllMonthlyBooks(clubId);
+            
+            // 현재 업데이트 대상 monthly_book의 ID 조회 (현재 활성 회차 우선)
+            let currentId: string | null = null;
+            const activeMb = await mockApi.clubs.getMonthlyBook(clubId);
+            if (activeMb) {
+              currentId = activeMb.id;
+            } else {
+              if (!isMockMode && supabase) {
+                const { data: latest } = await supabase
+                  .from('monthly_books')
+                  .select('id')
+                  .eq('group_id', clubId)
+                  .order('created_at', { ascending: false })
+                  .limit(1);
+                currentId = latest && latest.length > 0 ? latest[0].id : null;
+              } else {
+                const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+                const stored = typeof window !== 'undefined' ? localStorage.getItem(KEY_MONTHLY_BOOKS) : null;
+                const list = stored ? JSON.parse(stored) : [];
+                const clubList = list.filter((mb: any) => mb.group_id === clubId);
+                currentId = clubList.length > 0 ? clubList[0].id : null;
+              }
+            }
+
+            for (const mb of allMbs) {
+              if (currentId && mb.id === currentId) continue; // 자기 자신 제외
+
+              // 유효하지 않은 회차 제외
+              if (!mb.book_id || mb.book_id.trim() === '') continue;
+              if (mb.stage === 'recap' || mb.stage === 'archived' || mb.stage === 'cancelled' || mb.stage === 'replaced') continue;
+              if (!mb.timeline_reading) continue;
+
+              const { startDate: targetStart, endDate: targetEnd } = getMbStartEndDates(mb);
+              if (targetStart && targetEnd) {
+                // 기간이 겹치는지 체크
+                if (newStart <= targetEnd && targetStart <= newEnd) {
+                  console.warn('[Conflict Alert] updateMonthlyBook 일정 겹침 감지:', {
+                    currentEpisodeId: currentId,
+                    comparingEpisodeId: mb.id,
+                    comparingEpisodeMonth: mb.month,
+                    comparingEpisodeStart: targetStart,
+                    comparingEpisodeEnd: targetEnd,
+                    newStart,
+                    newEnd
+                  });
+                  const bookTitle = mb.books?.title || '제목 없음';
+                  let formattedTimeline = '';
+                  if (mb.timeline_reading) {
+                    formattedTimeline = mb.timeline_reading.split('~').map((d: string) => {
+                      const parts = d.trim().split('-');
+                      if (parts.length === 3) return `${Number(parts[1])}.${Number(parts[2])}`;
+                      return d;
+                    }).join(' ~ ');
+                  }
+                  throw new Error(`다른 회차의 일정과 기간이 겹칩니다.\n겹치는 회차:\n${bookTitle}\n${formattedTimeline}`);
+                }
+              }
+            }
+          }
+        }
+      }
+
       if (!isMockMode && supabase) {
         try {
-          const { data: latest, error: findError } = await supabase
-            .from('monthly_books')
-            .select('id')
-            .eq('group_id', clubId)
-            .order('created_at', { ascending: false })
-            .limit(1);
+          // 최신 회차가 아니라, 현재 활성 회차(active monthly_book)를 조회하여 수정 대상으로 잡음
+          const activeMb = await mockApi.clubs.getMonthlyBook(clubId);
+          let targetId: string | null = activeMb ? activeMb.id : null;
 
-          if (findError) throw findError;
+          if (!targetId) {
+            const { data: latest, error: findError } = await supabase
+              .from('monthly_books')
+              .select('id')
+              .eq('group_id', clubId)
+              .order('created_at', { ascending: false })
+              .limit(1);
 
-          if (latest && latest.length > 0) {
+            if (findError) throw findError;
+            targetId = latest && latest.length > 0 ? latest[0].id : null;
+          }
+
+          if (targetId) {
             const { error: updateError } = await supabase
               .from('monthly_books')
               .update(data)
-              .eq('id', latest[0].id);
+              .eq('id', targetId);
 
             if (updateError) throw updateError;
           } else {
@@ -921,6 +1279,38 @@ export const mockApi = {
       }
 
       // 로컬 Mock 모드
+      const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+      const stored = typeof window !== 'undefined' ? localStorage.getItem(KEY_MONTHLY_BOOKS) : null;
+      const mbList = stored ? JSON.parse(stored) : [];
+      
+      // 현재 활성 회차를 우선적으로 타겟팅
+      const activeMb = await mockApi.clubs.getMonthlyBook(clubId);
+      let targetMb = activeMb;
+
+      if (!targetMb) {
+        const clubMbs = mbList.filter((mb: any) => mb.group_id === clubId);
+        targetMb = clubMbs.length > 0 ? clubMbs[0] : null;
+      }
+
+      if (targetMb) {
+        const idx = mbList.findIndex((mb: any) => mb.id === targetMb.id);
+        if (idx > -1) {
+          mbList[idx] = {
+            ...mbList[idx],
+            stage: data.stage || mbList[idx].stage,
+            timeline_reading: data.timeline_reading !== undefined ? data.timeline_reading : mbList[idx].timeline_reading,
+            timeline_question: data.timeline_question !== undefined ? data.timeline_question : mbList[idx].timeline_question,
+            timeline_discussion: data.timeline_discussion !== undefined ? data.timeline_discussion : mbList[idx].timeline_discussion
+          };
+          if (data.book_id) {
+            mbList[idx].book_id = data.book_id;
+          }
+          if (typeof window !== 'undefined') {
+            localStorage.setItem(KEY_MONTHLY_BOOKS, JSON.stringify(mbList));
+          }
+        }
+      }
+
       if (data.stage) {
         let uiStage = 'reading';
         if (data.stage === 'question') uiStage = 'question_collecting';
@@ -951,7 +1341,113 @@ export const mockApi = {
       }
     },
 
-    // 다음 도서 최종 선정 (새로운 monthly_books row 누적 생성 및 아카이브 유지)
+    updateMonthlyBookById: async (
+      clubId: string,
+      mbId: string,
+      data: {
+        stage?: 'reading' | 'question' | 'discussion' | 'recap' | 'scheduled';
+        timeline_reading?: string | null;
+        timeline_question?: string | null;
+        timeline_discussion?: string | null;
+      }
+    ): Promise<void> => {
+      // 겹침 일정 충돌 실시간 방어 검증
+      if (data.timeline_reading) {
+        const parts = data.timeline_reading.split('~');
+        if (parts.length === 2) {
+          const newStart = parseDateString(parts[0])?.toISOString().split('T')[0];
+          const newEnd = parseDateString(parts[1])?.toISOString().split('T')[0];
+
+          if (newStart && newEnd) {
+            // 다른 회차들 조회
+            const allMbs = await mockApi.clubs.getAllMonthlyBooks(clubId);
+
+            for (const mb of allMbs) {
+              if (mb.id === mbId) continue; // 자기 자신 제외
+
+              // 유효하지 않은 회차 제외
+              if (!mb.book_id || mb.book_id.trim() === '') continue;
+              if (mb.stage === 'recap' || mb.stage === 'archived' || mb.stage === 'cancelled' || mb.stage === 'replaced') continue;
+              if (!mb.timeline_reading) continue;
+
+              const { startDate: targetStart, endDate: targetEnd } = getMbStartEndDates(mb);
+              if (targetStart && targetEnd) {
+                // 기간이 겹치는지 체크
+                if (newStart <= targetEnd && targetStart <= newEnd) {
+                  console.warn('[Conflict Alert] updateMonthlyBookById 일정 겹침 감지:', {
+                    currentEpisodeId: mbId,
+                    comparingEpisodeId: mb.id,
+                    comparingEpisodeMonth: mb.month,
+                    comparingEpisodeStart: targetStart,
+                    comparingEpisodeEnd: targetEnd,
+                    newStart,
+                    newEnd
+                  });
+                  const bookTitle = mb.books?.title || '제목 없음';
+                  let formattedTimeline = '';
+                  if (mb.timeline_reading) {
+                    formattedTimeline = mb.timeline_reading.split('~').map((d: string) => {
+                      const parts = d.trim().split('-');
+                      if (parts.length === 3) return `${Number(parts[1])}.${Number(parts[2])}`;
+                      return d;
+                    }).join(' ~ ');
+                  }
+                  throw new Error(`다른 회차의 일정과 기간이 겹칩니다.\n겹치는 회차:\n${bookTitle}\n${formattedTimeline}`);
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (!isMockMode && supabase) {
+        try {
+          const { error: updateError } = await supabase
+            .from('monthly_books')
+            .update(data)
+            .eq('id', mbId);
+
+          if (updateError) throw updateError;
+        } catch (err: any) {
+          const errDetails = {
+            function: 'updateMonthlyBookById',
+            message: err?.message || 'No message',
+            code: err?.code || 'No code',
+            details: err?.details || 'No details',
+            hint: err?.hint || 'No hint',
+            payload: {
+              clubId,
+              mbId,
+              data
+            }
+          };
+          console.error('[DB] updateMonthlyBookById error:', errDetails);
+          throw err;
+        }
+        return;
+      }
+
+      // 로컬 Mock 모드
+      const KEY_MONTHLY_BOOKS = 'bookclub_mock_monthly_books';
+      const stored = typeof window !== 'undefined' ? localStorage.getItem(KEY_MONTHLY_BOOKS) : null;
+      const mbList = stored ? JSON.parse(stored) : [];
+
+      const idx = mbList.findIndex((mb: any) => mb.id === mbId);
+      if (idx > -1) {
+        mbList[idx] = {
+          ...mbList[idx],
+          stage: data.stage || mbList[idx].stage,
+          timeline_reading: data.timeline_reading !== undefined ? data.timeline_reading : mbList[idx].timeline_reading,
+          timeline_question: data.timeline_question !== undefined ? data.timeline_question : mbList[idx].timeline_question,
+          timeline_discussion: data.timeline_discussion !== undefined ? data.timeline_discussion : mbList[idx].timeline_discussion
+        };
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(KEY_MONTHLY_BOOKS, JSON.stringify(mbList));
+        }
+      }
+    },
+
+    // 다음 회차 도서 최종 선정 (새로운 monthly_books row 누적 생성 및 아카이브 유지)
     selectNextBook: async (
       clubId: string, 
       bookData: { 
@@ -969,6 +1465,42 @@ export const mockApi = {
       },
       targetType: 'current' | 'next' = 'current'
     ): Promise<void> => {
+      const today = new Date();
+      const formatDate = (d: Date) => d.toISOString().split('T')[0];
+      const after30Days = new Date();
+      after30Days.setDate(today.getDate() + 30);
+      const targetMonth = targetType === 'next'
+        ? new Date(today.getFullYear(), today.getMonth() + 1, 1).toISOString().substring(0, 7)
+        : today.toISOString().substring(0, 7);
+
+      // 겹침 일정 충돌 검증 (이번 달 공유책 즉시 지정인 경우에만 검증)
+      if (targetType === 'current') {
+        const newStart = formatDate(today);
+        const newEnd = formatDate(after30Days);
+
+        const allMbs = await mockApi.clubs.getAllMonthlyBooks(clubId);
+
+        for (const mb of allMbs) {
+          if (mb.month === targetMonth) continue; // 동일 월은 덮어쓰기/수정 대상이므로 겹침 체크 제외
+
+          const { startDate: targetStart, endDate: targetEnd } = getMbStartEndDates(mb);
+          if (targetStart && targetEnd) {
+            if (newStart <= targetEnd && targetStart <= newEnd) {
+              console.warn('[Conflict Alert] selectNextBook (current) 일정 겹침 감지:', {
+                currentEpisodeMonth: targetMonth,
+                comparingEpisodeId: mb.id,
+                comparingEpisodeMonth: mb.month,
+                comparingEpisodeStart: targetStart,
+                comparingEpisodeEnd: targetEnd,
+                newStart,
+                newEnd
+              });
+              throw new Error('다른 회차의 독서 일정과 겹칩니다.');
+            }
+          }
+        }
+      }
+
       if (!isMockMode && supabase) {
         try {
           const { id: bookId } = await mockApi.books.findOrCreateBook({
@@ -985,14 +1517,8 @@ export const mockApi = {
             published_at: bookData.published_at
           });
 
-          const today = new Date();
-          const formatDate = (d: Date) => d.toISOString().split('T')[0];
-
           if (targetType === 'next') {
             // 다음 달 도서 예약 선정
-            const nextMonthDate = new Date(today.getFullYear(), today.getMonth() + 1, 1);
-            const targetMonth = nextMonthDate.toISOString().substring(0, 7);
-
             console.log('[DB] selectNextBook (next month) check for month:', targetMonth);
             const { data: existingMb, error: selectMbError } = await supabase
               .from('monthly_books')
@@ -1008,7 +1534,7 @@ export const mockApi = {
 
             if (existingMb) {
               if (existingMb.book_id === bookId) {
-                throw new Error('이미 다음 달 예정 책으로 선정되어 있어요.');
+                throw new Error('이미 다음 예정 공유도서예요.');
               }
 
               console.log('[DB] Updating existing next month book to new selection... mbId:', existingMb.id);
@@ -1041,30 +1567,19 @@ export const mockApi = {
               if (insertMbError) throw insertMbError;
             }
           } else {
-            // 이번 달 공유 도서 즉시 지정
-            const targetMonth = today.toISOString().substring(0, 7);
+            // 현재 진행중인 공유 도서 즉시 지정
             const after30Days = new Date();
             after30Days.setDate(today.getDate() + 30);
 
-            console.log('[DB] selectNextBook (current month) check for month:', targetMonth);
-            const { data: existingMb, error: selectMbError } = await supabase
-              .from('monthly_books')
-              .select('id, book_id')
-              .eq('group_id', clubId)
-              .eq('month', targetMonth)
-              .maybeSingle();
+            console.log('[DB] selectNextBook (current month) get active monthly book');
+            const activeMb = await mockApi.clubs.getMonthlyBook(clubId);
 
-            if (selectMbError) {
-              console.error('[DB] selectNextBook current month check error:', selectMbError);
-              throw selectMbError;
-            }
-
-            if (existingMb) {
-              if (existingMb.book_id === bookId) {
-                throw new Error('이미 이번 달 공유책이에요.');
+            if (activeMb) {
+              if (activeMb.book_id === bookId) {
+                throw new Error('이미 현재 진행중인 공유도서예요.');
               }
 
-              console.log('[DB] Updating existing monthly book... mbId:', existingMb.id);
+              console.log('[DB] Updating active monthly book... mbId:', activeMb.id);
               const { error: updateMbError } = await supabase
                 .from('monthly_books')
                 .update({
@@ -1074,27 +1589,51 @@ export const mockApi = {
                   timeline_question: null,
                   timeline_discussion: null
                 })
-                .eq('id', existingMb.id);
+                .eq('id', activeMb.id);
 
               if (updateMbError) throw updateMbError;
             } else {
-              console.log('[DB] Inserting new monthly book...');
-              const { error: insertMbError } = await supabase
+              // activeMb가 없고, 같은 month인 row도 없는지 최종 체크
+              const { data: existingMbByMonth } = await supabase
                 .from('monthly_books')
-                .insert({
-                  group_id: clubId,
-                  book_id: bookId,
-                  month: targetMonth,
-                  stage: 'reading',
-                  timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
-                  timeline_question: null,
-                  timeline_discussion: null
-                });
+                .select('id')
+                .eq('group_id', clubId)
+                .eq('month', targetMonth)
+                .maybeSingle();
 
-              if (insertMbError) throw insertMbError;
+              if (existingMbByMonth) {
+                console.log('[DB] Updating existing monthly book by month... mbId:', existingMbByMonth.id);
+                const { error: updateMbError } = await supabase
+                  .from('monthly_books')
+                  .update({
+                    book_id: bookId,
+                    stage: 'reading',
+                    timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+                    timeline_question: null,
+                    timeline_discussion: null
+                  })
+                  .eq('id', existingMbByMonth.id);
+
+                if (updateMbError) throw updateMbError;
+              } else {
+                console.log('[DB] Inserting new monthly book...');
+                const { error: insertMbError } = await supabase
+                  .from('monthly_books')
+                  .insert({
+                    group_id: clubId,
+                    book_id: bookId,
+                    month: targetMonth,
+                    stage: 'reading',
+                    timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+                    timeline_question: null,
+                    timeline_discussion: null
+                  });
+
+                if (insertMbError) throw insertMbError;
+              }
             }
 
-            // 이번 달 새로운 공유책으로 교체/선정 시 모임원들의 개인 진척도를 0으로 리셋
+            // 현재 회차의 새로운 공유책으로 교체/선정 시 모임원들의 개인 진척도를 0으로 리셋
             const { data: members, error: mError } = await supabase
               .from('group_members')
               .select('user_id')
@@ -1185,24 +1724,93 @@ export const mockApi = {
         const storedMb = localStorage.getItem(KEY_MONTHLY_BOOKS);
         const mbList = storedMb ? JSON.parse(storedMb) : [];
         
-        const today = new Date();
         const after30Days = new Date();
         after30Days.setDate(today.getDate() + 30);
-        const formatDate = (d: Date) => d.toISOString().split('T')[0];
 
-        const newMb = {
-          id: 'monthly-mock-' + Date.now(),
-          group_id: clubId,
-          book_id: matchedBook.id,
-          month: today.toISOString().substring(0, 7),
-          stage: 'reading',
-          timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
-          timeline_question: null,
-          timeline_discussion: null,
-          books: matchedBook
-        };
-        
-        mbList.unshift(newMb);
+        if (targetType === 'next') {
+          // 다음 달 도서 예약 선정
+          const existingIdx = mbList.findIndex((mb: any) => mb.group_id === clubId && mb.month === targetMonth);
+          if (existingIdx > -1) {
+            if (mbList[existingIdx].book_id === matchedBook.id) {
+              throw new Error('이미 다음 예정 공유도서예요.');
+            }
+            mbList[existingIdx] = {
+              ...mbList[existingIdx],
+              book_id: matchedBook.id,
+              stage: 'scheduled',
+              timeline_reading: null,
+              timeline_question: null,
+              timeline_discussion: null,
+              books: matchedBook
+            };
+          } else {
+            const newMb = {
+              id: 'monthly-mock-' + Date.now(),
+              group_id: clubId,
+              book_id: matchedBook.id,
+              month: targetMonth,
+              stage: 'scheduled',
+              timeline_reading: null,
+              timeline_question: null,
+              timeline_discussion: null,
+              books: matchedBook
+            };
+            mbList.unshift(newMb);
+          }
+        } else {
+          // 현재 진행중인 공유 도서 즉시 지정
+          // 현재 활성 회차가 있으면 업데이트
+          const activeMb = await mockApi.clubs.getMonthlyBook(clubId);
+          let updated = false;
+
+          if (activeMb) {
+            const activeIdx = mbList.findIndex((mb: any) => mb.id === activeMb.id);
+            if (activeIdx > -1) {
+              if (mbList[activeIdx].book_id === matchedBook.id) {
+                throw new Error('이미 현재 진행중인 공유도서예요.');
+              }
+              mbList[activeIdx] = {
+                ...mbList[activeIdx],
+                book_id: matchedBook.id,
+                stage: 'reading',
+                timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+                timeline_question: null,
+                timeline_discussion: null,
+                books: matchedBook
+              };
+              updated = true;
+            }
+          }
+
+          if (!updated) {
+            // 활성 회차가 없으면 month 기준으로 매칭되는 것을 업데이트하거나 새로 만듬
+            const existingIdxByMonth = mbList.findIndex((mb: any) => mb.group_id === clubId && mb.month === targetMonth);
+            if (existingIdxByMonth > -1) {
+              mbList[existingIdxByMonth] = {
+                ...mbList[existingIdxByMonth],
+                book_id: matchedBook.id,
+                stage: 'reading',
+                timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+                timeline_question: null,
+                timeline_discussion: null,
+                books: matchedBook
+              };
+            } else {
+              const newMb = {
+                id: 'monthly-mock-' + Date.now(),
+                group_id: clubId,
+                book_id: matchedBook.id,
+                month: targetMonth,
+                stage: 'reading',
+                timeline_reading: `${formatDate(today)}~${formatDate(after30Days)}`,
+                timeline_question: null,
+                timeline_discussion: null,
+                books: matchedBook
+              };
+              mbList.unshift(newMb);
+            }
+          }
+        }
         localStorage.setItem(KEY_MONTHLY_BOOKS, JSON.stringify(mbList));
 
         const KEY_PROGRESS = 'bookclub_mock_progress';
@@ -1222,9 +1830,13 @@ export const mockApi = {
         });
         localStorage.setItem(KEY_PROGRESS, JSON.stringify(resetProgress));
 
-        localStorage.setItem(`bookclub_mock_club_stage_${clubId}`, 'reading');
-        localStorage.setItem(`bookclub_start_date_${clubId}`, formatDate(today));
-        localStorage.setItem(`bookclub_end_date_${clubId}`, formatDate(after30Days));
+        if (targetType === 'current') {
+          localStorage.setItem(`bookclub_mock_club_stage_${clubId}`, 'reading');
+          localStorage.setItem(`bookclub_start_date_${clubId}`, formatDate(today));
+          localStorage.setItem(`bookclub_end_date_${clubId}`, formatDate(after30Days));
+        } else {
+          localStorage.setItem(`bookclub_mock_club_stage_${clubId}`, 'scheduled');
+        }
       } catch (err) {
         console.warn('Mock selectNextBook error:', err);
         throw err;
@@ -1495,6 +2107,26 @@ export const mockApi = {
     },
 
     getByClub: async (clubId: string): Promise<Book | null> => {
+      // 1. 현재 활성화된 회차의 도서를 최우선으로 조회
+      try {
+        const activeMb = await mockApi.clubs.getMonthlyBook(clubId);
+        if (activeMb && activeMb.books) {
+          const b = activeMb.books;
+          return {
+            id: b.id,
+            club_id: clubId,
+            title: b.title,
+            author: b.author,
+            total_pages: b.total_pages,
+            cover_url: b.cover_url || '',
+            created_at: b.created_at
+          } as Book;
+        }
+      } catch (err) {
+        console.warn('Error fetching active monthly book in getByClub:', err);
+      }
+
+      // 2. 활성화된 회차가 없을 경우 기존 fallback 로직 수행
       if (!isMockMode && supabase) {
         try {
           const { data, error } = await supabase
@@ -1535,7 +2167,7 @@ export const mockApi = {
         }
       }
 
-      // 로컬 Mock 모드
+      // 로컬 Mock 모드 fallback
       const books = getStorageItem<Book>(KEY_BOOKS);
       return books.find(b => b.club_id === clubId) || null;
     },
@@ -3512,6 +4144,59 @@ export function calculateTimelineDates(
     };
   }
 }
+
+/**
+ * 로컬 타임존 기준 오늘 YYYY-MM-DD 날짜 문자열 반환
+ */
+export function getTodayYmd(): string {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Date 객체를 로컬 시간대 기준 YYYY-MM-DD 형식 문자열로 변환
+ */
+export function formatToLocalYmd(d: Date | null): string | null {
+  if (!d || isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * monthly_book의 시작일과 종료일 문자열(YYYY-MM-DD)을 도출하는 헬퍼
+ */
+export function getMbStartEndDates(mb: any): { startDate: string | null; endDate: string | null } {
+  let startDate: string | null = null;
+  let endDate: string | null = null;
+  if (mb.timeline_reading) {
+    const parts = mb.timeline_reading.split('~');
+    if (parts.length === 2) {
+      const s = parseDateString(parts[0]);
+      const e = parseDateString(parts[1]);
+      if (s) startDate = formatToLocalYmd(s);
+      if (e) endDate = formatToLocalYmd(e);
+    }
+  }
+  if (!startDate || !endDate) {
+    if (mb.month) {
+      const parts = mb.month.split('-');
+      if (parts.length === 2) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10);
+        startDate = `${parts[0]}-${parts[1]}-01`;
+        const lastDay = new Date(year, month, 0).getDate();
+        endDate = `${parts[0]}-${parts[1]}-${String(lastDay).padStart(2, '0')}`;
+      }
+    }
+  }
+  return { startDate, endDate };
+}
+
 
 
 

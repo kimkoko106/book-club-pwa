@@ -22,6 +22,8 @@ export default function HomePage() {
   const [initError, setInitError] = useState<string | null>(null);
   const [showTimeoutFallback, setShowTimeoutFallback] = useState(false);
   const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('reading');
+  const [nextBook, setNextBook] = useState<any | null>(null);
+  const [nextMonthlyBook, setNextMonthlyBook] = useState<any | null>(null);
   const router = useRouter();
 
   // 함께 읽는 모임원 전체의 평균 진행률 계산
@@ -95,6 +97,14 @@ export default function HomePage() {
   const loadClubData = useCallback(async (userId: string, clubId: string) => {
     try {
       const monthlyBook = await mockApi.clubs.getMonthlyBook(clubId);
+      const nextMb = await mockApi.clubs.getNextMonthlyBook(clubId);
+      if (nextMb) {
+        setNextMonthlyBook(nextMb);
+        setNextBook(nextMb.books);
+      } else {
+        setNextMonthlyBook(null);
+        setNextBook(null);
+      }
       
       if (monthlyBook) {
         const calculatedStage = getStageByDates(
@@ -460,174 +470,321 @@ export default function HomePage() {
 
             {/* 2. 현재 읽고 있는 책 카드 혹은 새 공유책 권유 카드 */}
             {activeBook ? (
-              <>
-                <BookProgressCard
-                  book={activeBook}
-                  progress={myProgress}
-                  onUpdate={handleProgressUpdate}
-                  onUpdateTotalPages={handleUpdateTotalPages}
-                />
-
-                {/* 3. 함께 읽는 여정 카드 (기존 4번 '독서 흐름 단계 카드') */}
-                <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
-                  {/* 홈 화면용 압축형 감성 진행바 UI */}
-                  <div className="flex flex-col gap-2.5">
-                    <div className="flex justify-between items-center text-[9.5px]">
-                      <span className="font-extrabold text-foreground/45">함께 책 읽는 여정 🗺️</span>
-                      <span className="text-sage-dark font-black tracking-normal">
-                        {discussionStage === 'reading' && '천천히 읽으며 질문을 남겨보세요 📖'}
-                        {discussionStage === 'question_collecting' && '함께 오래 이야기할 질문을 골라요 🌱'}
-                        {discussionStage === 'discussion' && '선정 질문으로 자유롭게 대화해요 💬'}
-                        {discussionStage === 'archiving' && '이번 달 독서를 돌아봐요 🌙'}
+              discussionStage === 'archiving' ? (
+                /* 결산일 당일 화면 분기: 현재 회차(완료) -> 결산 -> 다음 예정 공유도서 */
+                <div className="flex flex-col gap-3.5 w-full">
+                  {/* 1. 현재 회차 완료 카드 */}
+                  <div className="bg-card-bg rounded-2xl border border-card-border p-6 shadow-sm flex flex-col gap-4 relative overflow-hidden transition-all duration-300 hover:shadow-md">
+                    <div className="absolute top-0 right-6 w-5 h-8 bg-sage-medium/85 rounded-b-md shadow-inner flex justify-center items-center">
+                      <div className="w-1.5 h-1.5 bg-card-bg rounded-full" />
+                    </div>
+                    <div className="flex gap-4 items-start">
+                      {activeBook.cover_url ? (
+                        <img 
+                          src={activeBook.cover_url} 
+                          alt="표지" 
+                          className="w-14 h-20 rounded object-cover border border-card-border shadow-xs flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-14 h-20 rounded bg-gradient-to-tr from-sage-light/35 to-sage-light/10 border border-card-border/70 flex flex-col justify-between py-2.5 px-1.5 shadow-xs flex-shrink-0 text-center select-none relative overflow-hidden">
+                          <div className="absolute top-0 left-0 w-1 h-full bg-sage-dark/10" />
+                          <span className="text-[9px] font-black text-sage-dark leading-tight line-clamp-2 w-full px-0.5 mt-0.5">
+                            {activeBook.title}
+                          </span>
+                          <span className="text-[7.5px] font-extrabold text-sage-medium/90 truncate w-full px-0.5">
+                            {activeBook.author || '지은이 없음'}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex-grow flex flex-col gap-1 pr-6 min-w-0">
+                        <span className="text-[9.5px] font-bold text-sage-medium uppercase tracking-wider">진행 도서 완료</span>
+                        <h3 className="text-base font-black text-foreground leading-snug truncate">{activeBook.title}</h3>
+                        <p className="text-xs text-foreground/60 font-medium truncate mt-0.5 flex items-center gap-1.5 flex-wrap">
+                          <span>{activeBook.author} 저</span>
+                          {activeBook.total_pages && activeBook.total_pages > 1 && (
+                            <>
+                              <span>·</span>
+                              <span>전체 {activeBook.total_pages}p</span>
+                            </>
+                          )}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="h-px bg-card-border" />
+                    <div className="flex justify-between items-center bg-sage-light/25 border border-sage-light/65 px-4 py-3 rounded-2xl">
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[9px] font-black text-sage-dark/60 uppercase tracking-wider">상태</span>
+                        <span className="text-xs font-black text-sage-dark">🏁 이번 회차 완료 및 결산 진행중</span>
+                      </div>
+                      <span className="text-[10px] font-black bg-sage-medium text-white px-2.5 py-1 rounded-xl">
+                        독서 종료
                       </span>
                     </div>
+                  </div>
 
-                    <div className="flex items-center justify-between relative px-2 py-1 mt-1">
-                      {/* 연결 선 (다이어리 감성 얇은 점선) */}
-                      <div className="absolute top-[13px] left-6 right-6 border-t border-dashed border-card-border/80 z-0" />
-                      <div 
-                        className="absolute top-[13px] left-6 border-t border-dashed border-sage-medium/70 transition-all duration-300 z-0"
-                        style={{
-                          width: 
-                            discussionStage === 'reading' ? '0%' :
-                            discussionStage === 'question_collecting' ? '33%' :
-                            discussionStage === 'discussion' ? '66%' : '100%'
-                        }}
-                      />
+                  {/* 2. 결산 화면 */}
+                  <div className="bg-card-bg border border-card-border rounded-2xl p-5 shadow-xs flex flex-col gap-4 relative overflow-hidden text-center">
+                    <div className="absolute top-0 right-0 w-24 h-24 bg-sage-light/10 rounded-full translate-x-8 -translate-y-8" />
+                    <div className="flex flex-col items-center gap-1.5">
+                      <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">여정의 맺음</span>
+                      <h3 className="text-xs font-black text-foreground mt-0.5">독서 결산 진행중 🌙</h3>
+                    </div>
+                    <p className="text-[10.5px] text-sage-dark font-extrabold max-w-[280px] mx-auto leading-relaxed bg-sage-light/25 border border-sage-light/50 px-3 py-2 rounded-xl">
+                      📢 오늘은 이번 회차 마지막 날입니다.
+                    </p>
+                    <p className="text-[9.5px] text-foreground/50 font-medium leading-relaxed">
+                      모두의 사색 질문과 댓글을 바탕으로 이야기가 결산되는 날입니다. 하단의 토론방 탭으로 이동하면 자세한 결산 통계를 보실 수 있습니다.
+                    </p>
+                  </div>
 
-                      {[
-                        { key: 'reading', label: '책 읽기', emoji: '📖' },
-                        { key: 'question_collecting', label: '토론 주제 선정', emoji: '🗳️' },
-                        { key: 'discussion', label: '토론 진행', emoji: '💬' },
-                        { key: 'archiving', label: '결산 회고', emoji: '🌙' }
-                      ].map((step, idx) => {
-                        const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(discussionStage);
-                        const isActive = step.key === discussionStage;
-                        const isCompleted = idx < currentIdx;
+                  {/* 3. 다음 예정 공유도서 */}
+                  {nextBook && nextMonthlyBook && (
+                    <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs">
+                      <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
+                        <span>다음 예정 공유도서 🌱</span>
+                        <span className="text-sage-dark font-black">
+                          {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                            const parts = d.trim().split('-');
+                            if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
+                            return d;
+                          }).join(' ~ ') : '일정 조율 중'}
+                        </span>
+                      </div>
+                      <div className="flex gap-3 items-center">
+                        {nextBook.cover_url ? (
+                          <img src={nextBook.cover_url} alt="Cover" className="w-10 h-14 rounded object-cover border border-card-border shadow-xs" />
+                        ) : (
+                          <div className="w-10 h-14 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold">📖</div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                          <span className="text-[10px] text-foreground/45 font-medium truncate mt-0.5">{nextBook.author}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* 기존 평소 독서 진행 중 화면 */
+                <>
+                  <BookProgressCard
+                    book={activeBook}
+                    progress={myProgress}
+                    onUpdate={handleProgressUpdate}
+                    onUpdateTotalPages={handleUpdateTotalPages}
+                  />
 
-                        let statusBg = 'bg-card-bg border-card-border/60 text-foreground/30 opacity-40';
-                        let displayContent = step.emoji;
+                  {nextBook && nextMonthlyBook && (
+                    <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs">
+                      <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
+                        <span>다음 예정 공유도서 🌱</span>
+                        <span className="text-sage-dark font-black">
+                          {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                            const parts = d.trim().split('-');
+                            if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
+                            return d;
+                          }).join(' ~ ') : '일정 조율 중'}
+                        </span>
+                      </div>
+                      <div className="flex gap-3 items-center">
+                        {nextBook.cover_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={nextBook.cover_url} alt="Cover" className="w-10 h-14 rounded object-cover border border-card-border shadow-xs" />
+                        ) : (
+                          <div className="w-10 h-14 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold">📖</div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                          <span className="text-[10px] text-foreground/45 font-medium truncate mt-0.5">{nextBook.author}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
-                        if (isActive) {
-                          statusBg = 'bg-sage-light border-sage-medium text-sage-dark scale-105 shadow-xs ring-2 ring-sage-light/50 font-black';
-                        } else if (isCompleted) {
-                          statusBg = 'bg-sage-medium/10 border-sage-medium/30 text-sage-medium';
-                          displayContent = '✨';
-                        }
+                  {/* 3. 함께 읽는 여정 카드 (기존 4번 '독서 흐름 단계 카드') */}
+                  <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4 shadow-sm relative overflow-hidden">
+                    {/* 홈 화면용 압축형 감성 진행바 UI */}
+                    <div className="flex flex-col gap-2.5">
+                      <div className="flex justify-between items-center text-[9.5px]">
+                        <span className="font-extrabold text-foreground/45">함께 책 읽는 여정 🗺️</span>
+                        <span className="text-sage-dark font-black tracking-normal">
+                          {discussionStage === 'reading' && '천천히 읽으며 질문을 남겨보세요 📖'}
+                          {discussionStage === 'question_collecting' && '함께 오래 이야기할 질문을 골라요 🌱'}
+                          {discussionStage === 'discussion' && '선정 질문으로 자유롭게 대화해요 💬'}
+                        </span>
+                      </div>
 
-                        return (
-                          <div key={step.key} className="flex flex-col items-center gap-1 z-10 select-none">
-                            {/* 더 콤팩트한 w-6.5 h-6.5 노드 */}
-                            <div className={`w-6.5 h-6.5 rounded-xl border flex justify-center items-center text-xs transition-all duration-300 ${statusBg}`}>
-                              {displayContent}
+                      <div className="flex items-center justify-between relative px-2 py-1 mt-1">
+                        {/* 연결 선 (다이어리 감성 얇은 점선) */}
+                        <div className="absolute top-[13px] left-6 right-6 border-t border-dashed border-card-border/80 z-0" />
+                        <div 
+                          className="absolute top-[13px] left-6 border-t border-dashed border-sage-medium/70 transition-all duration-300 z-0"
+                          style={{
+                            width: 
+                              discussionStage === 'reading' ? '0%' :
+                              discussionStage === 'question_collecting' ? '33%' :
+                              discussionStage === 'discussion' ? '66%' : '100%'
+                          }}
+                        />
+
+                        {[
+                          { key: 'reading', label: '책 읽기', emoji: '📖' },
+                          { key: 'question_collecting', label: '토론 주제 선정', emoji: '🗳️' },
+                          { key: 'discussion', label: '토론 진행', emoji: '💬' },
+                          { key: 'archiving', label: '결산 회고', emoji: '🌙' }
+                        ].map((step, idx) => {
+                          const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(discussionStage);
+                          const isActive = step.key === discussionStage;
+                          const isCompleted = idx < currentIdx;
+
+                          let statusBg = 'bg-card-bg border-card-border/60 text-foreground/30 opacity-40';
+                          let displayContent = step.emoji;
+
+                          if (isActive) {
+                            statusBg = 'bg-sage-light border-sage-medium text-sage-dark scale-105 shadow-xs ring-2 ring-sage-light/50 font-black';
+                          } else if (isCompleted) {
+                            statusBg = 'bg-sage-medium/10 border-sage-medium/30 text-sage-medium';
+                            displayContent = '✨';
+                          }
+
+                          return (
+                            <div key={step.key} className="flex flex-col items-center gap-1 z-10 select-none">
+                              {/* 더 콤팩트한 w-6.5 h-6.5 노드 */}
+                              <div className={`w-6.5 h-6.5 rounded-xl border flex justify-center items-center text-xs transition-all duration-300 ${statusBg}`}>
+                                {displayContent}
+                              </div>
+                              <span className={`text-[8px] font-bold ${
+                                isActive ? 'text-sage-dark font-black' :
+                                isCompleted ? 'text-sage-medium/70' : 'text-foreground/35'
+                              }`}>{step.label}</span>
                             </div>
-                            <span className={`text-[8px] font-bold ${
-                              isActive ? 'text-sage-dark font-black' :
-                              isCompleted ? 'text-sage-medium/70' : 'text-foreground/35'
-                            }`}>{step.label}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Stepper 하단 한 줄 설명 칩 */}
-                    <div className="mt-2 bg-sage-light/35 border border-sage-light rounded-xl p-2.5 flex items-center gap-2">
-                      <div className="w-5 h-5 rounded-lg bg-sage-medium flex justify-center items-center text-xs text-white">
-                        {discussionStage === 'reading' && '📖'}
-                        {discussionStage === 'question_collecting' && '🗳️'}
-                        {discussionStage === 'discussion' && '💬'}
-                        {discussionStage === 'archiving' && '🌙'}
+                          );
+                        })}
                       </div>
+
+                      {/* Stepper 하단 한 줄 설명 칩 */}
+                      <div className="mt-2 bg-sage-light/35 border border-sage-light rounded-xl p-2.5 flex items-center gap-2">
+                        <div className="w-5 h-5 rounded-lg bg-sage-medium flex justify-center items-center text-xs text-white">
+                          {discussionStage === 'reading' && '📖'}
+                          {discussionStage === 'question_collecting' && '🗳️'}
+                          {discussionStage === 'discussion' && '💬'}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[9.5px] font-black text-sage-dark leading-snug">
+                            {discussionStage === 'reading' && '지금은 [책 읽기] 단계예요'}
+                            {discussionStage === 'question_collecting' && '지금은 [토론 주제 선정] 단계예요'}
+                            {discussionStage === 'discussion' && '지금은 [토론 진행] 단계예요'}
+                          </span>
+                          <span className="text-[8px] text-foreground/50 font-medium leading-relaxed">
+                            {discussionStage === 'reading' && '천천히 읽으며 마음에 남는 질문을 남겨보세요.'}
+                            {discussionStage === 'question_collecting' && '모인 질문 중에서 가장 나누고 싶은 토론 주제를 선정합니다.'}
+                            {discussionStage === 'discussion' && '선정된 질문으로 자유롭게 대화하고 생각을 나누어봐요.'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4. 함께 읽는 진행률 카드 (기존 3번 '함께 읽는 진행률 카드') */}
+                  <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4.5 shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md">
+                    <div className="flex justify-between items-center">
                       <div className="flex flex-col">
-                        <span className="text-[9.5px] font-black text-sage-dark leading-snug">
-                          {discussionStage === 'reading' && '지금은 [책 읽기] 단계예요'}
-                          {discussionStage === 'question_collecting' && '지금은 [토론 주제 선정] 단계예요'}
-                          {discussionStage === 'discussion' && '지금은 [토론 진행] 단계예요'}
-                          {discussionStage === 'archiving' && '지금은 [결산 회고] 단계예요'}
-                        </span>
-                        <span className="text-[8px] text-foreground/50 font-medium leading-relaxed">
-                          {discussionStage === 'reading' && '천천히 읽으며 마음에 남는 질문을 남겨보세요.'}
-                          {discussionStage === 'question_collecting' && '모인 질문 중에서 가장 나누고 싶은 토론 주제를 선정합니다.'}
-                          {discussionStage === 'discussion' && '선정된 질문으로 자유롭게 대화하고 생각을 나누어봐요.'}
-                          {discussionStage === 'archiving' && '이번 달 독서 여정을 돌아보고 소감을 마무리해요.'}
-                        </span>
+                        <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">모임 진행도</span>
+                        <h3 className="text-sm font-black text-foreground">함께 채워가는 중 🌱</h3>
+                      </div>
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sage-medium/10 border border-sage-medium/25 text-sage-medium rounded-full text-xs font-bold">
+                        <span>{membersProgress.length}명 함께 읽는 중</span>
                       </div>
                     </div>
-                  </div>
-                </div>
 
-                {/* 4. 함께 읽는 진행률 카드 (기존 3번 '함께 읽는 진행률 카드') */}
-                <div className="bg-card-bg border border-card-border rounded-2xl p-5 flex flex-col gap-4.5 shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md">
-                  <div className="flex justify-between items-center">
-                    <div className="flex flex-col">
-                      <span className="text-[9px] font-bold text-sage-medium uppercase tracking-wider">모임 진행도</span>
-                      <h3 className="text-sm font-black text-foreground">함께 채워가는 중 🌱</h3>
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex justify-between items-end text-xs font-bold">
+                        <span className="text-foreground/50">전체 평균 진행률</span>
+                        <span className="text-sm font-black text-sage-dark">{avgProgress}%</span>
+                      </div>
+                      
+                      {/* 프로그레스 바 */}
+                      <div className="w-full h-3 bg-sage-light/50 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-sage-medium rounded-full transition-all duration-500 ease-out" 
+                          style={{ width: `${avgProgress}%` }} 
+                        />
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-sage-medium/10 border border-sage-medium/25 text-sage-medium rounded-full text-xs font-bold">
-                      <span>{membersProgress.length}명 함께 읽는 중</span>
-                    </div>
-                  </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <div className="flex justify-between items-end text-xs font-bold">
-                      <span className="text-foreground/50">전체 평균 진행률</span>
-                      <span className="text-sm font-black text-sage-dark">{avgProgress}%</span>
-                    </div>
-                    
-                    {/* 프로그레스 바 */}
-                    <div className="w-full h-3 bg-sage-light/50 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-sage-medium rounded-full transition-all duration-500 ease-out" 
-                        style={{ width: `${avgProgress}%` }} 
-                      />
-                    </div>
+                    <button
+                      onClick={() => router.push('/club')}
+                      className="w-full py-2 border border-card-border hover:bg-sage-light/10 text-foreground/75 hover:text-sage-dark rounded-xl text-xs font-black transition-all cursor-pointer flex justify-center items-center gap-1"
+                    >
+                      전체 진행률 보기
+                    </button>
                   </div>
 
-                  <button
-                    onClick={() => router.push('/club')}
-                    className="w-full py-2 border border-card-border hover:bg-sage-light/10 text-foreground/75 hover:text-sage-dark rounded-xl text-xs font-black transition-all cursor-pointer flex justify-center items-center gap-1"
+                  {/* 5. 질문 후보 카드 */}
+                  <div 
+                    onClick={handleDiscussionClick}
+                    className="bg-gradient-to-r from-sage-medium/90 to-sage-dark hover:from-sage-dark hover:to-sage-dark text-white rounded-2xl p-4.5 flex justify-between items-center shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5"
                   >
-                    전체 진행률 보기
-                  </button>
-                </div>
-
-                {/* 5. 질문 후보 카드 */}
-                <div 
-                  onClick={handleDiscussionClick}
-                  className="bg-gradient-to-r from-sage-medium/90 to-sage-dark hover:from-sage-dark hover:to-sage-dark text-white rounded-2xl p-4.5 flex justify-between items-center shadow-sm cursor-pointer transition-all duration-300 transform hover:-translate-y-0.5"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-9.5 h-9.5 bg-white/10 rounded-xl flex justify-center items-center">
-                      <MessageSquare size={18} className="text-white" />
+                    <div className="flex items-center gap-3">
+                      <div className="w-9.5 h-9.5 bg-white/10 rounded-xl flex justify-center items-center">
+                        <MessageSquare size={18} className="text-white" />
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <h4 className="text-xs font-extrabold">질문 후보가 {questionCount}개 모였습니다</h4>
+                        <p className="text-[10px] text-white/80 font-medium">오래 붙잡고 싶은 질문들을 살펴보세요.</p>
+                      </div>
                     </div>
-                    <div className="flex flex-col gap-0.5">
-                      <h4 className="text-xs font-extrabold">질문 후보가 {questionCount}개 모였습니다</h4>
-                      <p className="text-[10px] text-white/80 font-medium">오래 붙잡고 싶은 질문들을 살펴보세요.</p>
+                    <div className="flex items-center gap-0.5 text-[10px] font-bold bg-white/10 px-2.5 py-1.5 rounded-xl hover:bg-white/20 transition-all">
+                      <span>토론 보러가기</span>
+                      <ArrowRight size={11} />
                     </div>
                   </div>
-                  <div className="flex items-center gap-0.5 text-[10px] font-bold bg-white/10 px-2.5 py-1.5 rounded-xl hover:bg-white/20 transition-all">
-                    <span>토론 보러가기</span>
-                    <ArrowRight size={11} />
-                  </div>
-                </div>
-              </>
+                </>
+              )
             ) : (
               /* 새 공유책이 없는 경우 예외 상태 노출 */
-              <div className="bg-card-bg border border-card-border border-dashed rounded-2xl p-6.5 text-center flex flex-col items-center gap-3.5 shadow-sm">
-                <div className="w-12 h-12 bg-sage-light/40 rounded-2xl flex justify-center items-center text-sage-dark shadow-inner">
-                  <BookOpen size={20} />
+              nextBook && nextMonthlyBook ? (
+                <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs">
+                  <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
+                    <span>다음 예정 공유도서 🌱</span>
+                    <span className="text-sage-dark font-black">
+                      {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                        const parts = d.trim().split('-');
+                        if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
+                        return d;
+                      }).join(' ~ ') : '일정 조율 중'}
+                    </span>
+                  </div>
+                  <div className="flex gap-3 items-center">
+                    {nextBook.cover_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={nextBook.cover_url} alt="Cover" className="w-10 h-14 rounded object-cover border border-card-border shadow-xs" />
+                    ) : (
+                      <div className="w-10 h-14 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold">📖</div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                      <span className="text-[10px] text-foreground/45 font-medium truncate mt-0.5">{nextBook.author}</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex flex-col gap-1 px-1">
-                  <h4 className="text-xs font-extrabold text-foreground leading-snug">다음 공유책을 제안해주세요 📖</h4>
-                  <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">아직 이번 달 함께 읽을 새 공유책이 등록되지 않았습니다.</p>
+              ) : (
+                <div className="bg-card-bg border border-card-border border-dashed rounded-2xl p-6.5 text-center flex flex-col items-center gap-3.5 shadow-sm">
+                  <div className="w-12 h-12 bg-sage-light/40 rounded-2xl flex justify-center items-center text-sage-dark shadow-inner">
+                    <BookOpen size={20} />
+                  </div>
+                  <div className="flex flex-col gap-1 px-1">
+                    <h4 className="text-xs font-extrabold text-foreground leading-snug">다음 공유책을 제안해주세요 📖</h4>
+                    <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">아직 이번 달 함께 읽을 새 공유책이 등록되지 않았습니다.</p>
+                  </div>
+                  <button
+                    onClick={() => router.push('/club/candidate')}
+                    className="px-4 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs transition-all cursor-pointer"
+                  >
+                    책 후보방으로 이동
+                  </button>
                 </div>
-                <button
-                  onClick={() => router.push('/club/candidate')}
-                  className="px-4 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs transition-all cursor-pointer"
-                >
-                  책 후보방으로 이동
-                </button>
-              </div>
+              )
             )}
 
             {/* 결산 유예 기간 grace card (독서 종료 후 7일 이내 노출 - 최하단 보조 노출) */}

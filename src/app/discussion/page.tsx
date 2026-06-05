@@ -56,6 +56,9 @@ export default function DiscussionPage() {
 
   // 1. 토론방 단계 상태 정의
   const [discussionStage, setDiscussionStage] = useState<'reading' | 'question_collecting' | 'discussion' | 'archiving'>('reading');
+  const [activeBook, setActiveBook] = useState<any | null>(null);
+  const [nextBook, setNextBook] = useState<any | null>(null);
+  const [nextMonthlyBook, setNextMonthlyBook] = useState<any | null>(null);
   const [showRecapGraceCard, setShowRecapGraceCard] = useState(false);
   const [prevRecapBook, setPrevRecapBook] = useState<any | null>(null);
 
@@ -109,6 +112,14 @@ export default function DiscussionPage() {
 
           // monthly_books 정보 조회하여 이야기방 초기 상태 동기화
           const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
+          const nextMb = await mockApi.clubs.getNextMonthlyBook(club.id);
+          if (nextMb) {
+            setNextMonthlyBook(nextMb);
+            setNextBook(nextMb.books);
+          } else {
+            setNextMonthlyBook(null);
+            setNextBook(null);
+          }
           if (monthlyBook) {
             const calculatedStage = getStageByDates(
               monthlyBook.timeline_reading,
@@ -119,14 +130,17 @@ export default function DiscussionPage() {
             if (calculatedStage === 'archived_recap') {
               // 결산 유예 단계: 메인에는 새 공유책이 없는 상태로 처리
               setActiveBookId('');
+              setActiveBook(null);
               setDiscussionStage('reading');
             } else {
               // 진행 중인 도서 존재
               setActiveBookId(monthlyBook.book_id);
+              setActiveBook(monthlyBook.books);
               setDiscussionStage(calculatedStage);
             }
           } else {
             setActiveBookId('');
+            setActiveBook(null);
             setDiscussionStage('reading');
           }
 
@@ -473,7 +487,7 @@ export default function DiscussionPage() {
                   {discussionStage === 'reading' && '천천히 책 속으로 들어가는 시간 🌲'}
                   {discussionStage === 'question_collecting' && '함께 이야기할 질문을 조용히 골라봅니다. 🌱'}
                   {discussionStage === 'discussion' && '생각을 나누는 시간 💬'}
-                  {discussionStage === 'archiving' && '이번 독서를 마음에 남기는 시간 ✨'}
+                  {discussionStage === 'archiving' && '이번 회차 독서를 마음에 남기는 시간 ✨'}
                 </span>
               </div>
 
@@ -532,7 +546,7 @@ export default function DiscussionPage() {
               <div className="flex flex-col gap-4">
                 {/* 이번 달 읽는 분위기 / 읽기 가이드 카드 */}
                 <div className="bg-card-bg border border-card-border rounded-2xl p-5 shadow-xs flex flex-col gap-3">
-                  <h3 className="text-xs font-black text-sage-dark uppercase tracking-wider">이번 달 읽는 분위기 🌲</h3>
+                  <h3 className="text-xs font-black text-sage-dark uppercase tracking-wider">현재 회차 읽는 분위기 🌲</h3>
                   <div className="bg-sage-light/10 border border-card-border/55 rounded-xl p-4 flex flex-col gap-2.5">
                     <p className="text-[11.5px] font-semibold text-foreground/75 leading-relaxed italic text-center">
                       “천천히 읽으며 마음에 남는 문장을 발견해보세요.”
@@ -554,7 +568,7 @@ export default function DiscussionPage() {
                 <div className="flex flex-col gap-3">
                   <div className="flex items-center gap-2">
                     <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
-                    <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
+                    <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">현재 회차 선정 사색 질문</h2>
                   </div>
                   <div 
                     onClick={() => setIsPreviewOpen(true)}
@@ -563,7 +577,7 @@ export default function DiscussionPage() {
                     <div className="flex flex-col gap-1">
                       <h4 className="text-xs font-extrabold flex items-center gap-1.5">
                         <Sparkles size={13} className="animate-pulse" />
-                        이번 달 선정 질문 {selectedQuestions.length}개 확정
+                        현재 회차 선정 질문 {selectedQuestions.length}개 확정
                       </h4>
                       <p className="text-[10px] text-white/70">토론 시작 전, 미리 선정된 질문들을 확인해 보세요.</p>
                     </div>
@@ -581,7 +595,7 @@ export default function DiscussionPage() {
               <div className="flex flex-col gap-4">
                 <div className="flex items-center gap-2">
                   <div className="w-1.5 h-3.5 bg-sage-medium rounded-full" />
-                  <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">이번 달 선정 사색 질문</h2>
+                  <h2 className="text-xs font-bold text-foreground/80 uppercase tracking-wider">현재 회차 선정 사색 질문</h2>
                 </div>
                 {reactionError && (
                   <div className="text-[10px] text-red-500 font-semibold px-1">
@@ -729,21 +743,53 @@ export default function DiscussionPage() {
             {/* 4단계: 결산 단계 화면 (archiving) */}
             {discussionStage === 'archiving' && (
               <div className="flex flex-col gap-4">
-                {/* 감성적인 종료 카드 */}
+                {/* 1. 현재 회차 완료 카드 */}
+                {activeBook && (
+                  <div className="bg-card-bg rounded-2xl border border-card-border p-5 shadow-sm flex flex-col gap-3 relative overflow-hidden">
+                    <div className="flex gap-4 items-start">
+                      {activeBook.cover_url ? (
+                        <img 
+                          src={activeBook.cover_url} 
+                          alt="Cover" 
+                          className="w-12 h-17 rounded object-cover border border-card-border shadow-xs flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-12 h-17 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold flex-shrink-0">📖</div>
+                      )}
+                      <div className="flex-1 min-w-0 flex flex-col justify-center">
+                        <span className="text-[8.5px] font-bold text-sage-medium uppercase tracking-wider">진행 도서 완료</span>
+                        <h4 className="text-xs font-black text-foreground truncate mt-0.5">{activeBook.title}</h4>
+                        <p className="text-[10px] text-foreground/45 truncate mt-1 font-semibold">{activeBook.author}</p>
+                      </div>
+                    </div>
+                    <div className="h-px bg-card-border" />
+                    <div className="flex justify-between items-center bg-sage-light/25 border border-sage-light/65 px-3 py-2 rounded-xl">
+                      <span className="text-[9px] font-black text-sage-dark">🏁 회차 종료 및 결산 진행중</span>
+                      <span className="text-[8.5px] font-black bg-sage-medium text-white px-2 py-0.5 rounded-lg">독서 완료</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 2. 종료 안내 카드 (오늘은 이번 회차 마지막 날입니다) */}
                 <div className="bg-card-bg border border-card-border rounded-2xl p-5 shadow-xs flex flex-col gap-4 relative overflow-hidden text-center">
                   <div className="absolute top-0 right-0 w-24 h-24 bg-sage-light/10 rounded-full translate-x-8 -translate-y-8" />
                   <div className="flex flex-col items-center gap-1.5">
                     <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">여정의 맺음</span>
-                    <h3 className="text-xs font-black text-foreground mt-0.5">『월든』 독서가 마무리되었어요 🌙</h3>
+                    <h3 className="text-xs font-black text-foreground mt-0.5">
+                      {activeBook ? `『${activeBook.title}』 ` : ''}독서가 마무리되었어요 🌙
+                    </h3>
                   </div>
+                  <p className="text-[10.5px] text-sage-dark font-extrabold max-w-[280px] mx-auto leading-relaxed bg-sage-light/25 border border-sage-light/50 px-3 py-2 rounded-xl">
+                    📢 오늘은 이번 회차 마지막 날입니다.
+                  </p>
                   <p className="text-[10px] text-foreground/50 font-medium max-w-[280px] mx-auto leading-relaxed">
-                    모두가 숲으로 들어가 삶의 깊은 의미를 함께 성찰했던 소중한 여정이 차분히 매듭을 지었습니다. 나눴던 사색 문장들과 대화들을 고요하게 회고해 봅니다.
+                    모두가 삶의 깊은 의미를 함께 성찰했던 소중한 여정이 차분히 매듭을 지었습니다. 나눴던 사색 문장들과 대화들을 고요하게 회고해 봅니다.
                   </p>
                 </div>
 
-                {/* 이번 달 토론 기록 통계 보드 */}
+                {/* 3. 이번 달 토론 기록 통계 보드 */}
                 <div className="bg-card-bg border border-card-border rounded-2xl p-5 shadow-xs flex flex-col gap-3">
-                  <h3 className="text-xs font-black text-sage-dark uppercase tracking-wider text-left">이번 달 토론의 흔적들</h3>
+                  <h3 className="text-xs font-black text-sage-dark uppercase tracking-wider text-left">이번 회차 토론의 흔적들</h3>
                   
                   <div className="grid grid-cols-2 gap-3.5">
                     {[
@@ -760,22 +806,48 @@ export default function DiscussionPage() {
                   </div>
                 </div>
 
-                {/* 다음 달 책 보러가기 CTA 카드 */}
-                <div 
-                  onClick={() => router.push('/club/candidate')}
-                  className="bg-sage-medium hover:bg-sage-dark text-white rounded-2xl p-5 shadow-sm cursor-pointer transition-all flex justify-between items-center group text-left"
-                >
-                  <div className="flex flex-col gap-0.5">
-                    <h4 className="text-xs font-black flex items-center gap-1.5 text-white">
-                      다음 달 함께 읽을 책 보러가기
-                    </h4>
-                    <p className="text-[8.5px] text-white/70 font-semibold">새롭게 꾸려질 다음 달의 생각 후보방으로 여행해 보세요.</p>
+                {/* 4. 다음 예정 공유도서 */}
+                {nextBook && nextMonthlyBook ? (
+                  <div className="bg-card-bg border border-card-border rounded-2xl p-4 flex flex-col gap-3 shadow-xs">
+                    <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
+                      <span>다음 예정 공유도서 🌱</span>
+                      <span className="text-sage-dark font-black">
+                        {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                          const parts = d.trim().split('-');
+                          if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
+                          return d;
+                        }).join(' ~ ') : '일정 조율 중'}
+                      </span>
+                    </div>
+                    <div className="flex gap-3 items-center">
+                      {nextBook.cover_url ? (
+                        <img src={nextBook.cover_url} alt="Cover" className="w-10 h-14 rounded object-cover border border-card-border shadow-xs" />
+                      ) : (
+                        <div className="w-10 h-14 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-[10px] text-sage-dark font-bold">📖</div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                        <span className="text-[10px] text-foreground/45 font-medium truncate mt-0.5">{nextBook.author}</span>
+                      </div>
+                    </div>
                   </div>
-                  <span className="text-[9px] font-black bg-white/20 px-2.5 py-1 rounded-lg group-hover:bg-white/35 transition-all flex items-center gap-0.5 text-white">
-                    이동
-                    <ChevronRight size={10} />
-                  </span>
-                </div>
+                ) : (
+                  <div 
+                    onClick={() => router.push('/club/candidate')}
+                    className="bg-sage-medium hover:bg-sage-dark text-white rounded-2xl p-5 shadow-sm cursor-pointer transition-all flex justify-between items-center group text-left"
+                  >
+                    <div className="flex flex-col gap-0.5">
+                      <h4 className="text-xs font-black flex items-center gap-1.5 text-white">
+                        다음 예정 공유도서 보러가기
+                      </h4>
+                      <p className="text-[8.5px] text-white/70 font-semibold">새롭게 꾸려질 다음 예정 공유도서 후보방으로 여행해 보세요.</p>
+                    </div>
+                    <span className="text-[9px] font-black bg-white/20 px-2.5 py-1 rounded-lg group-hover:bg-white/35 transition-all flex items-center gap-0.5 text-white">
+                      다음 책 보기
+                      <ChevronRight size={10} />
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -787,7 +859,7 @@ export default function DiscussionPage() {
             </div>
             <div className="flex flex-col gap-1 px-1">
               <h4 className="text-xs font-extrabold text-foreground leading-snug">다음 공유책을 제안해주세요 📖</h4>
-              <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">아직 이번 달 함께 읽을 새 공유책이 등록되지 않았습니다.</p>
+              <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">아직 현재 진행중인 새 공유도서가 등록되지 않았습니다.</p>
             </div>
             <button
               onClick={() => router.push('/club/candidate')}
@@ -807,9 +879,9 @@ export default function DiscussionPage() {
             <div className="flex flex-col gap-0.5 text-left">
               <span className="text-[8px] font-black text-white/70 uppercase tracking-widest leading-none">지난 여정의 열매 🌙</span>
               <h4 className="text-xs font-black flex items-center gap-1.5 text-white mt-1">
-                지난 달 독서 결산 보기
+                지난 공유도서 결산 보기
               </h4>
-              <p className="text-[9.5px] text-white/70 font-semibold leading-none mt-1.5">이전 달에 나눴던 아름다운 사색 조각과 회고록이 도착했어요.</p>
+              <p className="text-[9.5px] text-white/70 font-semibold leading-none mt-1.5">지난 회차에 나눴던 아름다운 사색 조각과 회고록이 도착했어요.</p>
             </div>
             <span className="text-[9px] font-black bg-white/20 px-2.5 py-1 rounded-lg group-hover:bg-white/35 transition-all flex items-center gap-0.5 text-white flex-shrink-0">
               열기
@@ -984,7 +1056,7 @@ export default function DiscussionPage() {
 
             <div className="flex justify-between items-center mt-2">
               <div className="flex flex-col gap-0.5">
-                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">이번 달의 생각 준비실</span>
+                <span className="text-[8px] font-black text-sage-dark uppercase tracking-widest">이번 회차의 생각 준비실</span>
                 <h3 className="text-sm font-black text-foreground">선정된 사색 질문 목록</h3>
               </div>
               <button 

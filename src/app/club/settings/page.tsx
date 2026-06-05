@@ -69,8 +69,11 @@ export default function ClubSettingsPage() {
   const [currentUser, setCurrentUser] = useState<{ id: string; username: string } | null>(null);
   const [activeClub, setActiveClub] = useState<BookClub | null>(null);
   const [activeBook, setActiveBook] = useState<Book | null>(null);
+  const [nextBook, setNextBook] = useState<Book | null>(null);
+  const [nextMonthlyBook, setNextMonthlyBook] = useState<any | null>(null);
   const [members, setMembers] = useState<UserBookProgress[]>([]);
   const [questions, setQuestions] = useState<any[]>([]);
+  const [editingMbId, setEditingMbId] = useState<string | null>(null); // null: 현재 회차 편집, string: 특정 다음 회차 편집
 
   // 모달 제어 상태
   const [isBookModalOpen, setIsBookModalOpen] = useState(false);
@@ -90,6 +93,7 @@ export default function ClubSettingsPage() {
 
   // 모달 오픈 시 기존 책 정보 채워넣기
   const openEditBookModal = () => {
+    if (isPastEpisode) return; // 과거 회차 수정 금지
     if (activeBook) {
       setEditBookTitle(activeBook.title);
       setEditBookAuthor(activeBook.author || '');
@@ -129,134 +133,184 @@ export default function ClubSettingsPage() {
   const [saveError, setSaveError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
-  // 1. 초기 데이터 로드
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const { data } = await mockApi.auth.getUser();
-        if (!data?.user) {
-          router.push('/login');
-          return;
-        }
-        setCurrentUser(data.user);
+  // 과거 회차 여부 및 회차 전체 데이터 상태 추가
+  const [isPastEpisode, setIsPastEpisode] = useState(false);
+  const [allMbs, setAllMbs] = useState<any[]>([]);
+  const [currentMbId, setCurrentMbId] = useState<string | null>(null);
 
-        const myClubs = await mockApi.clubs.getMyClubs(data.user.id);
-        if (myClubs.length > 0) {
-          const club = myClubs[0];
-          setActiveClub(club);
-          setClubTitleInput(club.title);
-          setClubDescInput(club.description || '');
-
-          // monthly_books 정보 조회 및 로컬 백업
-          const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
-          let tempStart = '2026-05-01';
-          let tempEnd = '2026-05-31';
-          let tempQStart = '2026-05-20';
-          let tempQEnd = '2026-05-25';
-          let tempTStart = '2026-05-26';
-          let tempTEnd = '2026-05-31';
-          let tempQDays = 10;
-          let tempTDays = 5;
-          let tempIsAdvanced = false;
-
-          if (monthlyBook) {
-            if (monthlyBook.timeline_reading) {
-              const parts = monthlyBook.timeline_reading.split('~');
-              if (parts.length === 2) {
-                tempStart = parts[0];
-                tempEnd = parts[1];
-                localStorage.setItem(`bookclub_start_date_${club.id}`, parts[0]);
-                localStorage.setItem(`bookclub_end_date_${club.id}`, parts[1]);
-              }
-            }
-            if (monthlyBook.timeline_question) {
-              const parts = monthlyBook.timeline_question.split('~');
-              if (parts.length === 2) {
-                tempQStart = parts[0];
-                tempQEnd = parts[1];
-                localStorage.setItem(`bookclub_q_start_date_${club.id}`, parts[0]);
-                localStorage.setItem(`bookclub_q_end_date_${club.id}`, parts[1]);
-              }
-            }
-            if (monthlyBook.timeline_discussion) {
-              const parts = monthlyBook.timeline_discussion.split('~');
-              if (parts.length === 2) {
-                tempTStart = parts[0];
-                tempTEnd = parts[1];
-                localStorage.setItem(`bookclub_t_start_date_${club.id}`, parts[0]);
-                localStorage.setItem(`bookclub_t_end_date_${club.id}`, parts[1]);
-              }
-            }
-          }
-
-          // 로컬스토리지에 저장된 독서 흐름 설정 로드 및 보완
-          const localStart = localStorage.getItem(`bookclub_start_date_${club.id}`);
-          const localEnd = localStorage.getItem(`bookclub_end_date_${club.id}`);
-          const localQDays = localStorage.getItem(`bookclub_q_days_${club.id}`);
-          const localTDays = localStorage.getItem(`bookclub_t_days_${club.id}`);
-          const localIsAdvanced = localStorage.getItem(`bookclub_is_advanced_${club.id}`);
-          const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`);
-          const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`);
-          const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`);
-          const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`);
-
-          if (localStart) tempStart = localStart;
-          if (localEnd) tempEnd = localEnd;
-          if (localQDays) tempQDays = Number(localQDays);
-          if (localTDays) tempTDays = Number(localTDays);
-          if (localIsAdvanced) tempIsAdvanced = localIsAdvanced === 'true';
-          if (localQStart) tempQStart = localQStart;
-          if (localQEnd) tempQEnd = localQEnd;
-          if (localTStart) tempTStart = localTStart;
-          if (localTEnd) tempTEnd = localTEnd;
-
-          // 자동 일정 계산 모드일 경우 calculateTimelineDates 결과를 덮어씀
-          if (!tempIsAdvanced) {
-            const calc = calculateTimelineDates(tempStart, tempEnd, tempQDays, tempTDays, false);
-            if (calc) {
-              tempQStart = calc.qStartDate;
-              tempQEnd = calc.qEndDate;
-              tempTStart = calc.tStartDate;
-              tempTEnd = calc.tEndDate;
-            }
-          }
-
-          // 날짜 및 상태 설정
-          setStartDate(tempStart);
-          setEndDate(tempEnd);
-          setQDays(tempQDays);
-          setTDays(tempTDays);
-          setIsAdvanced(tempIsAdvanced);
-          setQStartDate(tempQStart);
-          setQEndDate(tempQEnd);
-          setTStartDate(tempTStart);
-          setTEndDate(tempTEnd);
-
-          // stage 계산 강제 적용 (수동 설정 로드 대신 getStageByDates 이용)
-          const calculated = getStageByDates(
-            `${tempStart}~${tempEnd}`,
-            tempQStart && tempQEnd ? `${tempQStart}~${tempQEnd}` : null,
-            tempTStart && tempTEnd ? `${tempTStart}~${tempTEnd}` : null
-          );
-          let uiStage = calculated === 'archived_recap' ? 'archiving' : calculated;
-          setStage(uiStage as any);
-          localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, uiStage);
-
-          const book = await mockApi.books.getByClub(club.id);
-          setActiveBook(book);
-
-          if (book) {
-            const progresses = await mockApi.progress.getMemberProgressList(club.id, book.id);
-            setMembers(progresses);
-
-            const qList = await mockApi.discussion.getQuestions(club.id, book.id);
-            setQuestions(qList);
-          }
-        }
-      } catch (err) {
-        console.error('설정 데이터 로드 중 오류:', err);
+  // 1. 초기 데이터 로드 함수 분리
+  const loadData = async () => {
+    try {
+      const { data } = await mockApi.auth.getUser();
+      if (!data?.user) {
+        router.push('/login');
+        return;
       }
+      setCurrentUser(data.user);
+
+      const myClubs = await mockApi.clubs.getMyClubs(data.user.id);
+      if (myClubs.length > 0) {
+        const club = myClubs[0];
+        setActiveClub(club);
+        setClubTitleInput(club.title);
+        setClubDescInput(club.description || '');
+
+        // 모든 회차 리스트 조회
+        const mbs = await mockApi.clubs.getAllMonthlyBooks(club.id);
+        setAllMbs(mbs);
+
+        // monthly_books 정보 조회 및 로컬 백업
+        const monthlyBook = await mockApi.clubs.getMonthlyBook(club.id);
+        const nextMb = await mockApi.clubs.getNextMonthlyBook(club.id);
+        if (nextMb) {
+          setNextMonthlyBook(nextMb);
+          setNextBook(nextMb.books);
+        } else {
+          setNextMonthlyBook(null);
+          setNextBook(null);
+        }
+        let tempStart = '2026-05-01';
+        let tempEnd = '2026-05-31';
+        let tempQStart = '2026-05-20';
+        let tempQEnd = '2026-05-25';
+        let tempTStart = '2026-05-26';
+        let tempTEnd = '2026-05-31';
+        let tempQDays = 10;
+        let tempTDays = 5;
+        let tempIsAdvanced = false;
+
+        if (monthlyBook) {
+          setCurrentMbId(monthlyBook.id);
+          if (monthlyBook.timeline_reading) {
+            const parts = monthlyBook.timeline_reading.split('~');
+            if (parts.length === 2) {
+              tempStart = parts[0];
+              tempEnd = parts[1];
+              localStorage.setItem(`bookclub_start_date_${club.id}`, parts[0]);
+              localStorage.setItem(`bookclub_end_date_${club.id}`, parts[1]);
+            }
+          }
+          if (monthlyBook.timeline_question) {
+            const parts = monthlyBook.timeline_question.split('~');
+            if (parts.length === 2) {
+              tempQStart = parts[0];
+              tempQEnd = parts[1];
+              localStorage.setItem(`bookclub_q_start_date_${club.id}`, parts[0]);
+              localStorage.setItem(`bookclub_q_end_date_${club.id}`, parts[1]);
+            }
+          }
+          if (monthlyBook.timeline_discussion) {
+            const parts = monthlyBook.timeline_discussion.split('~');
+            if (parts.length === 2) {
+              tempTStart = parts[0];
+              tempTEnd = parts[1];
+              localStorage.setItem(`bookclub_t_start_date_${club.id}`, parts[0]);
+              localStorage.setItem(`bookclub_t_end_date_${club.id}`, parts[1]);
+            }
+          }
+
+          // 과거 회차 수정 금지 판단 로직 추가
+          const d = new Date();
+          const todayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          
+          let mbEnd: string | null = null;
+          if (monthlyBook.timeline_reading) {
+            const parts = monthlyBook.timeline_reading.split('~');
+            if (parts.length === 2) {
+              const parseEnd = parseDateString(parts[1]);
+              if (parseEnd) mbEnd = parseEnd.toISOString().split('T')[0];
+            }
+          }
+
+          if (mbEnd && todayStr > mbEnd) {
+            const hasNextStarted = mbs.some((item: any) => {
+              if (item.id === monthlyBook.id) return false;
+              
+              let nextStart: string | null = null;
+              if (item.timeline_reading) {
+                const p = item.timeline_reading.split('~');
+                if (p.length === 2) {
+                  const parseStart = parseDateString(p[0]);
+                  if (parseStart) nextStart = parseStart.toISOString().split('T')[0];
+                }
+              }
+              
+              return nextStart && nextStart > mbEnd! && todayStr >= nextStart;
+            });
+            
+            if (hasNextStarted) {
+              setIsPastEpisode(true);
+            }
+          }
+        }
+
+        // 로컬스토리지에 저장된 독서 흐름 설정 로드
+        const localStart = localStorage.getItem(`bookclub_start_date_${club.id}`);
+        const localEnd = localStorage.getItem(`bookclub_end_date_${club.id}`);
+        const localQDays = localStorage.getItem(`bookclub_q_days_${club.id}`);
+        const localTDays = localStorage.getItem(`bookclub_t_days_${club.id}`);
+        const localIsAdvanced = localStorage.getItem(`bookclub_is_advanced_${club.id}`);
+        const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`);
+        const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`);
+        const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`);
+        const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`);
+
+        if (localStart) tempStart = localStart;
+        if (localEnd) tempEnd = localEnd;
+        if (localQDays) tempQDays = Number(localQDays);
+        if (localTDays) tempTDays = Number(localTDays);
+        if (localIsAdvanced) tempIsAdvanced = localIsAdvanced === 'true';
+        if (localQStart) tempQStart = localQStart;
+        if (localQEnd) tempQEnd = localQEnd;
+        if (localTStart) tempTStart = localTStart;
+        if (localTEnd) tempTEnd = localTEnd;
+
+        if (!tempIsAdvanced) {
+          const calc = calculateTimelineDates(tempStart, tempEnd, tempQDays, tempTDays, false);
+          if (calc) {
+            tempQStart = calc.qStartDate;
+            tempQEnd = calc.qEndDate;
+            tempTStart = calc.tStartDate;
+            tempTEnd = calc.tEndDate;
+          }
+        }
+
+        setStartDate(tempStart);
+        setEndDate(tempEnd);
+        setQDays(tempQDays);
+        setTDays(tempTDays);
+        setIsAdvanced(tempIsAdvanced);
+        setQStartDate(tempQStart);
+        setQEndDate(tempQEnd);
+        setTStartDate(tempTStart);
+        setTEndDate(tempTEnd);
+
+        const calculated = getStageByDates(
+          `${tempStart}~${tempEnd}`,
+          tempQStart && tempQEnd ? `${tempQStart}~${tempQEnd}` : null,
+          tempTStart && tempTEnd ? `${tempTStart}~${tempTEnd}` : null
+        );
+        let uiStage = calculated === 'archived_recap' ? 'archiving' : calculated;
+        setStage(uiStage as any);
+        localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, uiStage);
+
+        const book = monthlyBook ? monthlyBook.books : null;
+        setActiveBook(book);
+
+        if (book) {
+          const progresses = await mockApi.progress.getMemberProgressList(club.id, book.id);
+          setMembers(progresses);
+
+          const qList = await mockApi.discussion.getQuestions(club.id, book.id);
+          setQuestions(qList);
+        }
+      }
+    } catch (err) {
+      console.error('설정 데이터 로드 중 오류:', err);
     }
+  };
+
+  useEffect(() => {
     loadData();
   }, [router]);
 
@@ -269,6 +323,141 @@ export default function ClubSettingsPage() {
     const diffTime = end.getTime() - start.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
     return diffDays > 0 ? diffDays : 1;
+  };
+
+  const handleOpenFlowModalForCurrentMb = () => {
+    if (isPastEpisode) return;
+    setEditingMbId(null);
+
+    const curMb = allMbs.find(mb => mb.id === currentMbId);
+    if (curMb) {
+      if (curMb.timeline_reading) {
+        const parts = curMb.timeline_reading.split('~');
+        if (parts.length === 2) {
+          setStartDate(parts[0]);
+          setEndDate(parts[1]);
+        }
+      }
+      let qStart = '';
+      let qEnd = '';
+      let tStart = '';
+      let tEnd = '';
+      if (curMb.timeline_question) {
+        const parts = curMb.timeline_question.split('~');
+        if (parts.length === 2) {
+          qStart = parts[0];
+          qEnd = parts[1];
+        }
+      }
+      if (curMb.timeline_discussion) {
+        const parts = curMb.timeline_discussion.split('~');
+        if (parts.length === 2) {
+          tStart = parts[0];
+          tEnd = parts[1];
+        }
+      }
+
+      setQStartDate(qStart);
+      setQEndDate(qEnd);
+      setTStartDate(tStart);
+      setTEndDate(tEnd);
+
+      if (qStart && qEnd) {
+        setQDays(getDaysBetween(qStart, qEnd));
+      }
+      if (tStart && tEnd) {
+        setTDays(getDaysBetween(tStart, tEnd));
+      }
+    }
+
+    setIsAdvanced(false);
+    setIsFlowModalOpen(true);
+  };
+
+  const handleOpenFlowModalForNextMb = () => {
+    if (!nextMonthlyBook) return;
+    setEditingMbId(nextMonthlyBook.id);
+
+    let tempStart = '';
+    let tempEnd = '';
+
+    if (nextMonthlyBook.timeline_reading) {
+      const parts = nextMonthlyBook.timeline_reading.split('~');
+      if (parts.length === 2) {
+        tempStart = parts[0];
+        tempEnd = parts[1];
+      }
+    } else {
+      // 현재 회차의 종료일 다음 날로 자동 추천
+      const curMb = allMbs.find(mb => mb.id === currentMbId);
+      let curEnd: Date | null = null;
+      if (curMb && curMb.timeline_reading) {
+        const parts = curMb.timeline_reading.split('~');
+        if (parts.length === 2) {
+          curEnd = parseDateString(parts[1]);
+        }
+      }
+
+      const baseDate = curEnd ? new Date(curEnd) : new Date();
+      if (curEnd) {
+        baseDate.setDate(baseDate.getDate() + 1); // 종료일 다음 날
+      }
+      
+      const formatYmd = (d: Date) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      tempStart = formatYmd(baseDate);
+      
+      const targetEnd = new Date(baseDate);
+      targetEnd.setDate(targetEnd.getDate() + 29); // 30일 뒤
+      tempEnd = formatYmd(targetEnd);
+    }
+
+    setStartDate(tempStart);
+    setEndDate(tempEnd);
+
+    let qStart = '';
+    let qEnd = '';
+    let tStart = '';
+    let tEnd = '';
+    if (nextMonthlyBook.timeline_question) {
+      const parts = nextMonthlyBook.timeline_question.split('~');
+      if (parts.length === 2) {
+        qStart = parts[0];
+        qEnd = parts[1];
+      }
+    }
+    if (nextMonthlyBook.timeline_discussion) {
+      const parts = nextMonthlyBook.timeline_discussion.split('~');
+      if (parts.length === 2) {
+        tStart = parts[0];
+        tEnd = parts[1];
+      }
+    }
+
+    // 만약 timeline_question / discussion도 없으면 qDays, tDays 기준으로 자동 계산
+    if (!qStart || !qEnd || !tStart || !tEnd) {
+      const calc = calculateTimelineDates(tempStart, tempEnd, qDays, tDays, false);
+      if (calc) {
+        qStart = calc.qStartDate;
+        qEnd = calc.qEndDate;
+        tStart = calc.tStartDate;
+        tEnd = calc.tEndDate;
+      }
+    }
+
+    setQStartDate(qStart);
+    setQEndDate(qEnd);
+    setTStartDate(tStart);
+    setTEndDate(tEnd);
+
+    if (qStart && qEnd) {
+      setQDays(getDaysBetween(qStart, qEnd));
+    }
+    if (tStart && tEnd) {
+      setTDays(getDaysBetween(tStart, tEnd));
+    }
+
+    setIsAdvanced(false);
+    setIsFlowModalOpen(true);
   };
 
   // --- 양방향 동기화 핸들러 (calculateTimelineDates 적용) ---
@@ -431,6 +620,10 @@ export default function ClubSettingsPage() {
   // 실시간 날짜 유효성 체크
   useEffect(() => {
     const validate = () => {
+      if (!editingMbId && isPastEpisode) {
+        return '이미 다음 독서 회차가 시작되어 이전 회차는 수정할 수 없습니다.';
+      }
+
       const start = new Date(startDate);
       const end = new Date(endDate);
 
@@ -440,6 +633,52 @@ export default function ClubSettingsPage() {
 
       if (start >= end) {
         return '읽기 종료일은 시작일보다 뒤여야 해요.';
+      }
+
+      // 다른 회차들과의 겹침(충돌) 실시간 검사 추가
+      if (allMbs.length > 0) {
+        const newStart = start.toISOString().split('T')[0];
+        const newEnd = end.toISOString().split('T')[0];
+        
+        for (const mb of allMbs) {
+          const selfId = editingMbId || currentMbId;
+          if (selfId && mb.id === selfId) continue;
+
+          // 유효하지 않은 회차 제외
+          if (!mb.book_id || mb.book_id.trim() === '') continue;
+          if (mb.stage === 'recap' || mb.stage === 'archived' || mb.stage === 'cancelled' || mb.stage === 'replaced') continue;
+          if (!mb.timeline_reading) continue;
+          
+          let targetStart: string | null = null;
+          let targetEnd: string | null = null;
+          if (mb.timeline_reading) {
+            const p = mb.timeline_reading.split('~');
+            if (p.length === 2) {
+              const s = parseDateString(p[0]);
+              const e = parseDateString(p[1]);
+              if (s) targetStart = s.toISOString().split('T')[0];
+              if (e) targetEnd = e.toISOString().split('T')[0];
+            }
+          }
+          if (targetStart && targetEnd) {
+            if (newStart <= targetEnd && targetStart <= newEnd) {
+              const bookTitle = mb.books?.title || '제목 없음';
+              let formattedTimeline = '';
+              if (mb.timeline_reading) {
+                formattedTimeline = mb.timeline_reading.split('~').map((d: string) => {
+                  const parts = d.trim().split('-');
+                  if (parts.length === 3) return `${Number(parts[1])}.${Number(parts[2])}`;
+                  return d;
+                }).join(' ~ ');
+              }
+
+              if ((!editingMbId || editingMbId === currentMbId) && nextMonthlyBook && mb.id === nextMonthlyBook.id) {
+                return `다음 예정 공유도서와 일정이 겹칩니다.\n겹치는 회차:\n${bookTitle}\n${formattedTimeline}`;
+              }
+              return `다른 회차의 일정과 기간이 겹칩니다.\n겹치는 회차:\n${bookTitle}\n${formattedTimeline}`;
+            }
+          }
+        }
       }
 
       if (!isAdvanced) {
@@ -482,7 +721,7 @@ export default function ClubSettingsPage() {
     };
 
     setValidationError(validate());
-  }, [startDate, endDate, qDays, tDays, qStartDate, qEndDate, tStartDate, tEndDate, isAdvanced]);
+  }, [startDate, endDate, qDays, tDays, qStartDate, qEndDate, tStartDate, tEndDate, isAdvanced, editingMbId, currentMbId, allMbs, nextMonthlyBook, isPastEpisode]);
 
   const calculatedTimeline = getTimelineDates();
 
@@ -705,7 +944,8 @@ export default function ClubSettingsPage() {
 
       // UI 및 activeBook 동기화
       if (currentUser && activeClub) {
-        const updatedBook = await mockApi.books.getByClub(activeClub.id);
+        const activeMb = await mockApi.clubs.getMonthlyBook(activeClub.id);
+        const updatedBook = activeMb ? activeMb.books : null;
         setActiveBook(updatedBook);
       }
     } catch (err) {
@@ -760,7 +1000,8 @@ export default function ClubSettingsPage() {
       }
 
       setIsBookEditModalOpen(false);
-      const updatedBook = await mockApi.books.getByClub(activeClub.id);
+      const activeMb = await mockApi.clubs.getMonthlyBook(activeClub.id);
+      const updatedBook = activeMb ? activeMb.books : null;
       setActiveBook(updatedBook);
       alert('도서 정보가 저장되었습니다.');
     } catch (err) {
@@ -909,30 +1150,43 @@ export default function ClubSettingsPage() {
       setStage(uiStage);
 
       // API Call
-      await mockApi.clubs.updateMonthlyBook(activeClub.id, {
-        stage: dbStage,
-        timeline_reading: timelineReading,
-        timeline_question: timelineQuestion,
-        timeline_discussion: timelineDiscussion
-      });
+      if (editingMbId) {
+        // 다음 예정 회차 수정
+        await mockApi.clubs.updateMonthlyBookById(activeClub.id, editingMbId, {
+          timeline_reading: timelineReading,
+          timeline_question: timelineQuestion,
+          timeline_discussion: timelineDiscussion
+        });
+      } else {
+        // 현재 회차 수정
+        await mockApi.clubs.updateMonthlyBook(activeClub.id, {
+          stage: dbStage,
+          timeline_reading: timelineReading,
+          timeline_question: timelineQuestion,
+          timeline_discussion: timelineDiscussion
+        });
 
-      localStorage.setItem(`bookclub_start_date_${activeClub.id}`, startDate);
-      localStorage.setItem(`bookclub_end_date_${activeClub.id}`, endDate);
-      localStorage.setItem(`bookclub_q_days_${activeClub.id}`, String(qDays));
-      localStorage.setItem(`bookclub_t_days_${activeClub.id}`, String(tDays));
-      localStorage.setItem(`bookclub_mock_club_stage_${activeClub.id}`, uiStage);
-      localStorage.setItem(`bookclub_is_advanced_${activeClub.id}`, String(isAdvanced));
-      
-      localStorage.setItem(`bookclub_q_start_date_${activeClub.id}`, qStartDate);
-      localStorage.setItem(`bookclub_q_end_date_${activeClub.id}`, qEndDate);
-      localStorage.setItem(`bookclub_t_start_date_${activeClub.id}`, tStartDate);
-      localStorage.setItem(`bookclub_t_end_date_${activeClub.id}`, tEndDate);
+        setStage(uiStage);
 
+        localStorage.setItem(`bookclub_start_date_${activeClub.id}`, startDate);
+        localStorage.setItem(`bookclub_end_date_${activeClub.id}`, endDate);
+        localStorage.setItem(`bookclub_q_days_${activeClub.id}`, String(qDays));
+        localStorage.setItem(`bookclub_t_days_${activeClub.id}`, String(tDays));
+        localStorage.setItem(`bookclub_mock_club_stage_${activeClub.id}`, uiStage);
+        localStorage.setItem(`bookclub_is_advanced_${activeClub.id}`, String(isAdvanced));
+        
+        localStorage.setItem(`bookclub_q_start_date_${activeClub.id}`, qStartDate);
+        localStorage.setItem(`bookclub_q_end_date_${activeClub.id}`, qEndDate);
+        localStorage.setItem(`bookclub_t_start_date_${activeClub.id}`, tStartDate);
+        localStorage.setItem(`bookclub_t_end_date_${activeClub.id}`, tEndDate);
+      }
+
+      await loadData();
       setIsFlowModalOpen(false);
       alert('독서 흐름 설정이 저장되었습니다.');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setSaveError('독서 흐름을 저장하지 못했어요. 잠시 후 다시 시도해주세요.');
+      setSaveError(err?.message || '독서 흐름을 저장하지 못했어요. 잠시 후 다시 시도해주세요.');
     } finally {
       setIsSaving(false);
     }
@@ -997,6 +1251,13 @@ export default function ClubSettingsPage() {
         <div className="w-8" />
       </header>
 
+      {isPastEpisode && (
+        <div className="mx-4 mt-3 bg-red-500/5 border border-red-500/20 text-red-500/85 text-[10px] font-black px-3 py-2.5 rounded-xl flex items-center gap-1.5 animate-fade-in shadow-xs">
+          <AlertCircle size={13} className="text-red-500 flex-shrink-0" />
+          <span>이미 다음 독서 회차가 시작되어 이전 회차는 수정할 수 없습니다.</span>
+        </div>
+      )}
+
        {/* 2. 운영 상태 요약 대시보드 (상단) */}
       <div className="mx-4 mt-4 bg-card-bg border border-card-border rounded-xl p-5 shadow-xs flex flex-col gap-4 relative overflow-hidden">
         {/* 데코 링 */}
@@ -1004,7 +1265,7 @@ export default function ClubSettingsPage() {
         
         <div className="flex justify-between items-center pb-2 border-b border-card-border/40">
           <span className="text-[9.5px] font-black text-sage-dark uppercase tracking-widest leading-none">운영실 대시보드 🌙</span>
-          <span className="text-[8px] font-extrabold text-foreground/45">이번 달 독서 현황 요약</span>
+          <span className="text-[8px] font-extrabold text-foreground/45">현재 회차 독서 현황 요약</span>
         </div>
         
         <div className="grid grid-cols-3 gap-2.5">
@@ -1037,19 +1298,35 @@ export default function ClubSettingsPage() {
             </div>
           </div>
         )}
+
+        {nextBook && (
+          <div className="flex gap-2.5 items-center bg-background/40 border border-card-border/30 rounded-xl p-2.5">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img 
+              src={nextBook.cover_url || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80'} 
+              alt="책 표지" 
+              className="w-7 h-10 rounded object-cover border border-card-border flex-shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <span className="text-[7px] font-bold text-sage-medium uppercase tracking-wider block">다음 예정 공유도서 🌱</span>
+              <h4 className="text-[11px] font-black text-foreground truncate mt-0.5">{nextBook.title}</h4>
+              <p className="text-[9px] text-foreground/45 truncate leading-none mt-0.5">{nextBook.author}</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 3. 본문 콤팩트 패널 영역 */}
       <main className="p-4 flex flex-col gap-4 pb-10">
 
-        {/* SECTION 1. 이번 달 독서 운영 (일정 및 질문 통합 섹션) */}
+        {/* SECTION 1. 현재 회차 독서 운영 (일정 및 질문 통합 섹션) */}
         <section className="bg-card-bg border border-card-border rounded-xl p-5 shadow-sm flex flex-col gap-5">
           <div className="flex justify-between items-center pb-2 border-b border-card-border/40">
             <div className="flex items-center gap-1.5">
               <div className="w-6.5 h-6.5 bg-sage-light rounded-lg flex justify-center items-center text-sage-dark">
                 <BookOpen size={12} />
               </div>
-              <h3 className="text-xs font-black text-foreground">이번 달 독서 운영</h3>
+              <h3 className="text-xs font-black text-foreground">현재 회차 독서 운영</h3>
             </div>
             <span className="bg-sage-medium/15 text-sage-dark border border-sage-medium/20 text-[8.5px] font-black px-2 py-0.5 rounded-full">
               {getStageLabel(stage)}
@@ -1066,7 +1343,7 @@ export default function ClubSettingsPage() {
                 className="w-10 h-14 rounded object-cover border border-card-border shadow-xs"
               />
               <div className="flex-1 min-w-0">
-                <span className="text-[8px] font-bold text-sage-dark uppercase leading-none">선정 도서</span>
+                <span className="text-[8px] font-bold text-sage-dark uppercase leading-none">선정 도서 (현재 공유도서)</span>
                 <h4 className="text-xs font-black text-foreground truncate mt-0.5">{activeBook.title}</h4>
                 <p className="text-[9.5px] text-foreground/45 truncate mt-0.5">
                   {activeBook.author} {activeBook.total_pages && activeBook.total_pages > 1 ? `· 전체 ${activeBook.total_pages}p` : ''}
@@ -1076,14 +1353,25 @@ export default function ClubSettingsPage() {
                 <button 
                   type="button"
                   onClick={openEditBookModal}
-                  className="px-2 py-1 border border-sage-light text-sage-dark hover:bg-sage-light/20 text-[9px] font-black rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1"
+                  disabled={isPastEpisode}
+                  className={`px-2 py-1 border border-sage-light text-sage-dark hover:bg-sage-light/20 text-[9px] font-black rounded-lg transition-all flex items-center justify-center gap-1 ${
+                    isPastEpisode ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'
+                  }`}
                 >
                   도서 수정
                 </button>
                 <button 
                   type="button"
-                  onClick={() => setIsBookModalOpen(true)}
-                  className="px-2 py-1 bg-sage-medium hover:bg-sage-dark text-white text-[9px] font-black rounded-lg transition-all cursor-pointer flex items-center justify-center gap-1 shadow-xs"
+                  onClick={() => {
+                    if (isPastEpisode) return;
+                    setIsBookModalOpen(true);
+                  }}
+                  disabled={isPastEpisode}
+                  className={`px-2 py-1 text-[9px] font-black rounded-lg transition-all flex items-center justify-center gap-1 shadow-xs ${
+                    isPastEpisode 
+                      ? 'bg-sage-light text-sage-dark/50 opacity-50 cursor-not-allowed' 
+                      : 'bg-sage-medium hover:bg-sage-dark text-white cursor-pointer'
+                  }`}
                 >
                   책 변경
                 </button>
@@ -1095,17 +1383,52 @@ export default function ClubSettingsPage() {
             </div>
           )}
 
+          {nextBook && nextMonthlyBook ? (
+            <div className="bg-background border border-card-border/80 rounded-xl p-3 flex gap-3 items-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img 
+                src={nextBook.cover_url || 'https://images.unsplash.com/photo-1544947950-fa07a98d237f?w=300&auto=format&fit=crop&q=80'} 
+                alt="책 표지" 
+                className="w-10 h-14 rounded object-cover border border-card-border shadow-xs flex-shrink-0"
+              />
+              <div className="flex-1 min-w-0">
+                <span className="text-[8px] font-bold text-sage-dark uppercase leading-none">다음 예정 공유도서</span>
+                <h4 className="text-xs font-black text-foreground truncate mt-0.5">{nextBook.title}</h4>
+                <p className="text-[9.5px] text-foreground/45 truncate mt-0.5">
+                  {nextMonthlyBook.timeline_reading ? `${nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
+                    const parts = d.trim().split('-');
+                    if (parts.length === 3) return `${Number(parts[1])}.${Number(parts[2])}`;
+                    return d;
+                  }).join(' ~ ')}` : ''}
+                </p>
+              </div>
+              <button 
+                type="button"
+                onClick={handleOpenFlowModalForNextMb}
+                className="px-2 py-1 border border-sage-light text-sage-dark hover:bg-sage-light/20 text-[9px] font-black rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+              >
+                일정 수정
+              </button>
+            </div>
+          ) : (
+            <div className="bg-background border border-dashed border-card-border/80 rounded-xl p-4 text-center text-[10px] text-foreground/50 font-bold">
+              다음 예정 공유도서가 아직 없어요.
+            </div>
+          )}
+
           {/* 독서 일정 타임라인 */}
           <div className="flex flex-col gap-2 bg-background/30 border border-card-border/40 rounded-xl p-3">
             <div className="flex justify-between items-center">
               <span className="text-[8.5px] font-extrabold text-foreground/45 uppercase tracking-wider">독서 흐름 일정</span>
               <button 
                 type="button"
-                onClick={() => {
-                  setIsAdvanced(false);
-                  setIsFlowModalOpen(true);
-                }}
-                className="text-[9px] text-sage-dark font-black hover:text-sage-medium flex items-center gap-0.5 cursor-pointer"
+                onClick={handleOpenFlowModalForCurrentMb}
+                disabled={isPastEpisode}
+                className={`text-[9px] font-black flex items-center gap-0.5 ${
+                  isPastEpisode 
+                    ? 'text-sage-dark/40 cursor-not-allowed opacity-50' 
+                    : 'text-sage-dark hover:text-sage-medium cursor-pointer'
+                }`}
               >
                 <Sliders size={10} />
                 일정 조율
@@ -1170,9 +1493,12 @@ export default function ClubSettingsPage() {
                       <span className="truncate">{q.content}</span>
                     </div>
                     <button 
-                      onClick={() => handleToggleQuestionStatus(q.id)}
-                      disabled={isActionLoading}
-                      className="flex-shrink-0 text-[8px] text-red-500/70 hover:text-red-500 hover:bg-red-50 font-black px-1.5 py-0.5 border border-red-200/40 rounded transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => {
+                        if (isPastEpisode) return;
+                        handleToggleQuestionStatus(q.id);
+                      }}
+                      disabled={isPastEpisode || isActionLoading}
+                      className="flex-shrink-0 text-[8px] text-red-500/70 hover:text-red-500 hover:bg-red-50 font-black px-1.5 py-0.5 border border-red-200/40 rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
                       제거
                     </button>
@@ -1251,9 +1577,14 @@ export default function ClubSettingsPage() {
                       </div>
                       
                       <button 
-                        onClick={() => handleToggleQuestionStatus(q.id)}
-                        disabled={isActionLoading}
-                        className={`flex-shrink-0 px-2.5 py-1.5 rounded-lg text-[9px] font-black transition-all flex items-center gap-0.5 cursor-pointer active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed ${
+                        onClick={() => {
+                          if (isPastEpisode) return;
+                          handleToggleQuestionStatus(q.id);
+                        }}
+                        disabled={isPastEpisode || isActionLoading}
+                        className={`flex-shrink-0 px-2.5 py-1.5 rounded-lg text-[9px] font-black transition-all flex items-center gap-0.5 active:scale-95 disabled:opacity-55 disabled:cursor-not-allowed ${
+                          isPastEpisode ? 'bg-foreground/5 text-foreground/30 cursor-not-allowed' : 'cursor-pointer'
+                        } ${
                           isSelected 
                             ? 'bg-warm-beige text-white hover:bg-warm-beige/95 shadow-xs' 
                             : 'bg-foreground/5 text-foreground/60 hover:bg-foreground/10'
@@ -1283,8 +1614,14 @@ export default function ClubSettingsPage() {
             <div className="flex gap-1.5">
               <button 
                 type="button"
-                onClick={() => setIsClubInfoModalOpen(true)}
-                className="text-[8.5px] text-sage-dark font-black flex items-center gap-1 border border-sage-light/80 px-2 py-0.5 rounded-lg bg-sage-light/10 hover:bg-sage-light/45 transition-all cursor-pointer"
+                onClick={() => {
+                  if (isPastEpisode) return;
+                  setIsClubInfoModalOpen(true);
+                }}
+                disabled={isPastEpisode}
+                className={`text-[8.5px] font-black flex items-center gap-1 border border-sage-light/80 px-2 py-0.5 rounded-lg bg-sage-light/10 hover:bg-sage-light/45 transition-all ${
+                  isPastEpisode ? 'opacity-55 cursor-not-allowed' : 'cursor-pointer'
+                }`}
               >
                 <Edit3 size={9} />
                 정보 수정
@@ -1333,8 +1670,16 @@ export default function ClubSettingsPage() {
 
                   {!isMe && (
                     <button 
-                      onClick={() => handleKickMember(member.user_id, member.profile?.username || '모임원')}
-                      className="w-6.5 h-6.5 rounded-md border border-card-border flex justify-center items-center text-foreground/30 hover:text-red-500 hover:bg-red-50 transition-all cursor-pointer animate-fade-in"
+                      onClick={() => {
+                        if (isPastEpisode) return;
+                        handleKickMember(member.user_id, member.profile?.username || '모임원');
+                      }}
+                      disabled={isPastEpisode}
+                      className={`w-6.5 h-6.5 rounded-md border border-card-border flex justify-center items-center transition-all animate-fade-in ${
+                        isPastEpisode 
+                          ? 'text-foreground/20 cursor-not-allowed' 
+                          : 'text-foreground/30 hover:text-red-500 hover:bg-red-50 cursor-pointer'
+                      }`}
                       title="내보내기"
                     >
                       <UserX size={10} />
@@ -1367,7 +1712,7 @@ export default function ClubSettingsPage() {
             <div className="flex justify-between items-center">
               <div className="flex items-center gap-2">
                 <Sliders size={14} className="text-sage-medium" />
-                <h3 className="text-xs font-black text-foreground">이번 달 독서 흐름 조정</h3>
+                <h3 className="text-xs font-black text-foreground">현재 회차 독서 흐름 조정</h3>
               </div>
               <button 
                 type="button"
@@ -1585,9 +1930,29 @@ export default function ClubSettingsPage() {
 
             {/* 유효성 에러 메시지 표시 */}
             {validationError && (
-              <div className="bg-red-500/5 border border-red-500/20 text-red-500/85 text-[9px] font-extrabold px-3 py-2 rounded-xl flex items-center gap-1.5 animate-fade-in">
-                <AlertCircle size={12} className="flex-shrink-0" />
-                <span>{validationError}</span>
+              <div className="flex flex-col gap-2 bg-red-500/5 border border-red-500/20 text-red-500/85 text-[9px] font-extrabold px-3 py-2.5 rounded-xl animate-fade-in">
+                <div className="flex items-center gap-1.5">
+                  <AlertCircle size={12} className="flex-shrink-0" />
+                  <span className="whitespace-pre-line leading-relaxed">{validationError}</span>
+                </div>
+                {validationError.includes('다음 예정 공유도서와 일정이 겹칩니다.') && (
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={handleOpenFlowModalForNextMb}
+                      className="px-2.5 py-1 bg-red-500 text-white rounded-lg text-[8.5px] font-black cursor-pointer hover:bg-red-600 transition-all border-none"
+                    >
+                      다음 회차 일정 수정하기
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsFlowModalOpen(false)}
+                      className="px-2.5 py-1 bg-foreground/10 text-foreground/60 rounded-lg text-[8.5px] font-black cursor-pointer hover:bg-foreground/15 transition-all border-none"
+                    >
+                      취소
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1789,7 +2154,7 @@ export default function ClubSettingsPage() {
       )}
 
       {/* ==========================================
-          MODAL 4: 이번 달 도서 수정 및 보완 모달 (신규)
+          MODAL 4: 현재 공유도서 수정 및 보완 모달 (신규)
       ========================================== */}
       {isBookEditModalOpen && activeBook && (
         <div className="fixed inset-0 bg-foreground/45 backdrop-blur-xs flex items-center justify-center p-5 z-50 animate-fade-in">
