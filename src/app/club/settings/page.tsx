@@ -633,11 +633,11 @@ export default function ClubSettingsPage() {
       const end = new Date(endDate);
 
       if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-        return '읽기 시작일과 종료일을 올바르게 입력해 주세요.';
+        return '회차 시작일과 종료일을 올바르게 입력해 주세요.';
       }
 
       if (start >= end) {
-        return '읽기 종료일은 시작일보다 뒤여야 해요.';
+        return '회차 종료일은 시작일보다 뒤여야 해요.';
       }
 
       // 다른 회차들과의 겹침(충돌) 실시간 검사 추가
@@ -692,7 +692,7 @@ export default function ClubSettingsPage() {
         }
 
         if (qs < start) {
-          return '토론 주제 선정 시작일은 전체 읽기 시작일 이후여야 해요.';
+          return '토론 주제 선정 시작일은 전체 회차 시작일 이후여야 해요.';
         }
 
         if (qs > qe) {

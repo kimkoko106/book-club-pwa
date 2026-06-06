@@ -74,7 +74,7 @@ export default function ClubHubPage() {
   const [isActionLoading, setIsActionLoading] = useState(false);
   const [userRole, setUserRole] = useState<'admin' | 'member'>('admin');
   const [stage, setStage] = useState<string>('reading');
-  const [timeline, setTimeline] = useState({ reading: '05.01~05.14', question: '05.15~05.25', discussion: '05.26~05.31' });
+  const [timeline, setTimeline] = useState({ reading: '05.01~05.14', question: '05.15~05.25', discussion: '05.26~05.31', recap: '06.01' });
   const router = useRouter();
 
   // 결산 회고용 상태 추가
@@ -115,6 +115,32 @@ export default function ClubHubPage() {
       } else {
         setNextMonthlyBook(null);
         setNextBook(null);
+      }
+
+      if (monthlyBook) {
+        const formatYmdToShort = (ymd: string | null): string => {
+          if (!ymd) return '';
+          const parts = ymd.split('-');
+          if (parts.length === 3) {
+            return `${parts[1]}.${parts[2]}`;
+          }
+          return ymd;
+        };
+
+        setTimeline({
+          reading: monthlyBook.reading_start_date && monthlyBook.reading_end_date 
+            ? `${formatYmdToShort(monthlyBook.reading_start_date)}~${formatYmdToShort(monthlyBook.reading_end_date)}`
+            : (monthlyBook.timeline_reading ? monthlyBook.timeline_reading.split('~').map((d: string) => formatYmdToShort(d.trim())).join('~') : ''),
+          question: monthlyBook.question_start_date && monthlyBook.question_end_date 
+            ? `${formatYmdToShort(monthlyBook.question_start_date)}~${formatYmdToShort(monthlyBook.question_end_date)}`
+            : (monthlyBook.timeline_question ? monthlyBook.timeline_question.split('~').map((d: string) => formatYmdToShort(d.trim())).join('~') : ''),
+          discussion: monthlyBook.discussion_start_date && monthlyBook.discussion_end_date 
+            ? `${formatYmdToShort(monthlyBook.discussion_start_date)}~${formatYmdToShort(monthlyBook.discussion_end_date)}`
+            : (monthlyBook.timeline_discussion ? monthlyBook.timeline_discussion.split('~').map((d: string) => formatYmdToShort(d.trim())).join('~') : ''),
+          recap: monthlyBook.recap_date 
+            ? formatYmdToShort(monthlyBook.recap_date)
+            : (monthlyBook.timeline_reading ? formatYmdToShort(monthlyBook.timeline_reading.split('~')[1].trim()) : '')
+        });
       }
 
       if (book) {
@@ -179,10 +205,12 @@ export default function ClubHubPage() {
             
             setStage(currentUiStage);
 
-            // DB 타임라인 정보를 로컬스토리지 백업 (DATE 필드 우선 적용)
-            if (monthlyBook.reading_start_date && monthlyBook.reading_end_date) {
-              localStorage.setItem(`bookclub_start_date_${club.id}`, monthlyBook.reading_start_date);
-              localStorage.setItem(`bookclub_end_date_${club.id}`, monthlyBook.reading_end_date);
+            // DB 타임라인 정보를 로컬스토리지 백업 (DATE 필드 우선 적용, reading_end_date 대신 episode_end_date 우선)
+            const totalStart = monthlyBook.episode_start_date || (monthlyBook.timeline_reading ? monthlyBook.timeline_reading.split('~')[0].trim() : null);
+            const totalEnd = monthlyBook.episode_end_date || (monthlyBook.timeline_reading ? monthlyBook.timeline_reading.split('~')[1].trim() : null);
+            if (totalStart && totalEnd) {
+              localStorage.setItem(`bookclub_start_date_${club.id}`, totalStart);
+              localStorage.setItem(`bookclub_end_date_${club.id}`, totalEnd);
             }
             if (monthlyBook.question_start_date && monthlyBook.question_end_date) {
               localStorage.setItem(`bookclub_q_start_date_${club.id}`, monthlyBook.question_start_date);
@@ -193,45 +221,31 @@ export default function ClubHubPage() {
               localStorage.setItem(`bookclub_t_end_date_${club.id}`, monthlyBook.discussion_end_date);
             }
             localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, currentUiStage);
-          }
 
-          const localStart = localStorage.getItem(`bookclub_start_date_${club.id}`) || '2026-05-01';
-          const localEnd = localStorage.getItem(`bookclub_end_date_${club.id}`) || '2026-05-31';
-          const localQDays = Number(localStorage.getItem(`bookclub_q_days_${club.id}`) || '10');
-          const localTDays = Number(localStorage.getItem(`bookclub_t_days_${club.id}`) || '5');
-          const localIsAdvanced = localStorage.getItem(`bookclub_is_advanced_${club.id}`) === 'true';
+            // DB 날짜를 직접 timeline 상태에 포맷팅해 주입
+            const formatYmdToShort = (ymd: string | null): string => {
+              if (!ymd) return '';
+              const parts = ymd.split('-');
+              if (parts.length === 3) {
+                return `${parts[1]}.${parts[2]}`;
+              }
+              return ymd;
+            };
 
-          try {
-            const localQStart = localStorage.getItem(`bookclub_q_start_date_${club.id}`) || '';
-            const localQEnd = localStorage.getItem(`bookclub_q_end_date_${club.id}`) || '';
-            const localTStart = localStorage.getItem(`bookclub_t_start_date_${club.id}`) || '';
-            const localTEnd = localStorage.getItem(`bookclub_t_end_date_${club.id}`) || '';
-
-            const calc = calculateTimelineDates(localStart, localEnd, localQDays, localTDays, localIsAdvanced, {
-              qStartDate: localQStart,
-              qEndDate: localQEnd,
-              tStartDate: localTStart,
-              tEndDate: localTEnd
+            setTimeline({
+              reading: monthlyBook.reading_start_date && monthlyBook.reading_end_date 
+                ? `${formatYmdToShort(monthlyBook.reading_start_date)}~${formatYmdToShort(monthlyBook.reading_end_date)}`
+                : (monthlyBook.timeline_reading ? monthlyBook.timeline_reading.split('~').map((d: string) => formatYmdToShort(d.trim())).join('~') : ''),
+              question: monthlyBook.question_start_date && monthlyBook.question_end_date 
+                ? `${formatYmdToShort(monthlyBook.question_start_date)}~${formatYmdToShort(monthlyBook.question_end_date)}`
+                : (monthlyBook.timeline_question ? monthlyBook.timeline_question.split('~').map((d: string) => formatYmdToShort(d.trim())).join('~') : ''),
+              discussion: monthlyBook.discussion_start_date && monthlyBook.discussion_end_date 
+                ? `${formatYmdToShort(monthlyBook.discussion_start_date)}~${formatYmdToShort(monthlyBook.discussion_end_date)}`
+                : (monthlyBook.timeline_discussion ? monthlyBook.timeline_discussion.split('~').map((d: string) => formatYmdToShort(d.trim())).join('~') : ''),
+              recap: monthlyBook.recap_date 
+                ? formatYmdToShort(monthlyBook.recap_date)
+                : (monthlyBook.timeline_reading ? formatYmdToShort(monthlyBook.timeline_reading.split('~')[1].trim()) : '')
             });
-
-            if (calc) {
-              const formatDateStr = (d: Date) => `${String(d.getMonth() + 1).padStart(2, '0')}.${String(d.getDate()).padStart(2, '0')}`;
-              
-              const start = parseDateString(calc.startDate);
-              const rEnd = parseDateString(calc.rEndDate);
-              const qStart = parseDateString(calc.qStartDate);
-              const qEnd = parseDateString(calc.qEndDate);
-              const tStart = parseDateString(calc.tStartDate);
-              const tEnd = parseDateString(calc.tEndDate);
-
-              setTimeline({
-                reading: `${start ? formatDateStr(start) : ''}~${rEnd ? formatDateStr(rEnd) : ''}`,
-                question: `${qStart ? formatDateStr(qStart) : ''}~${qEnd ? formatDateStr(qEnd) : ''}`,
-                discussion: `${tStart ? formatDateStr(tStart) : ''}~${tEnd ? formatDateStr(tEnd) : ''}`
-              });
-            }
-          } catch (err) {
-            console.warn('타임라인 연동 파싱 실패:', err);
           }
 
           // 먼저 기본 로드 후, 결산 상태이면 요약 데이터를 결합적으로 로드
@@ -691,7 +705,7 @@ export default function ClubHubPage() {
                       { key: 'reading', label: '책 읽기', emoji: '📖', date: timeline.reading },
                       { key: 'question_collecting', label: '토론 주제 선정', emoji: '🗳️', date: timeline.question },
                       { key: 'discussion', label: '토론 진행', emoji: '💬', date: timeline.discussion },
-                      { key: 'archiving', label: '결산 회고', emoji: '🌙', date: '독서 마무리' }
+                      { key: 'archiving', label: '결산 회고', emoji: '🌙', date: timeline.recap }
                     ].map((step, idx) => {
                       const currentIdx = ['reading', 'question_collecting', 'discussion', 'archiving'].indexOf(stage);
                       const isActive = step.key === stage;

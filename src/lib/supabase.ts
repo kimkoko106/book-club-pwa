@@ -489,10 +489,13 @@ export const mockApi = {
         return `${formatDate(d1)}~${formatDate(d2)}`;
       };
 
-      // 세부 타임라인 분배 (독서 15일, 질문 10일, 토론 5일)
+      // 세부 타임라인 분배 (전체 30일: 독서 15일, 질문 10일, 토론 5일)
       const rStart = new Date(today);
+      const dEnd = new Date(today);
+      dEnd.setDate(today.getDate() + 29); // 전체 기간 30일
+
       const rEnd = new Date(today);
-      rEnd.setDate(today.getDate() + 14);
+      rEnd.setDate(today.getDate() + 14); // 실제 독서 종료일은 오늘 + 14일
 
       const qStart = new Date(today);
       qStart.setDate(today.getDate() + 15);
@@ -501,12 +504,13 @@ export const mockApi = {
 
       const dStart = new Date(today);
       dStart.setDate(today.getDate() + 25);
-      const dEnd = new Date(today);
-      dEnd.setDate(today.getDate() + 29);
+      
+      const dEndMinus1 = new Date(dEnd);
+      dEndMinus1.setDate(dEnd.getDate() - 1);
 
-      const timelineReading = formatRange(rStart, rEnd);
+      const timelineReading = formatRange(rStart, dEnd);
       const timelineQuestion = formatRange(qStart, qEnd);
-      const timelineDiscussion = formatRange(dStart, dEnd);
+      const timelineDiscussion = formatRange(dStart, dEndMinus1);
 
       if (!isMockMode && supabase) {
         console.log('[Debug] createClub 시작 - userId:', userId);
@@ -723,6 +727,8 @@ export const mockApi = {
           question_end_date: formatDate(qEnd),
           discussion_start_date: formatDate(dStart),
           discussion_end_date: formatDate(dEnd),
+          episode_start_date: formatDate(rStart),
+          episode_end_date: formatDate(dEnd),
           books: newBook
         };
         mbList.unshift(newMb);
@@ -1248,18 +1254,40 @@ export const mockApi = {
       }
 
       const extendedData: any = { ...data };
-      if (data.timeline_reading !== undefined) {
-        const { start, end } = parseTimelineRange(data.timeline_reading);
+      const tReading = data.timeline_reading;
+      const tQuestion = data.timeline_question;
+      const tDiscussion = data.timeline_discussion;
+
+      if (tReading !== undefined) {
+        const { start, end } = parseTimelineRange(tReading);
         extendedData.reading_start_date = start;
-        extendedData.reading_end_date = end;
+        extendedData.episode_start_date = start;
+        extendedData.episode_end_date = end;
+        
+        let rEnd = end;
+        const qStartStr = tQuestion !== undefined ? parseTimelineRange(tQuestion).start : null;
+        if (qStartStr) {
+          const qStartDate = new Date(qStartStr);
+          qStartDate.setDate(qStartDate.getDate() - 1);
+          rEnd = formatToLocalYmd(qStartDate);
+        }
+        extendedData.reading_end_date = rEnd;
       }
-      if (data.timeline_question !== undefined) {
-        const { start, end } = parseTimelineRange(data.timeline_question);
+
+      if (tQuestion !== undefined) {
+        const { start, end } = parseTimelineRange(tQuestion);
         extendedData.question_start_date = start;
         extendedData.question_end_date = end;
+        
+        if (tReading === undefined && start) {
+          const qStartDate = new Date(start);
+          qStartDate.setDate(qStartDate.getDate() - 1);
+          extendedData.reading_end_date = formatToLocalYmd(qStartDate);
+        }
       }
-      if (data.timeline_discussion !== undefined) {
-        const { start, end } = parseTimelineRange(data.timeline_discussion);
+
+      if (tDiscussion !== undefined) {
+        const { start, end } = parseTimelineRange(tDiscussion);
         extendedData.discussion_start_date = start;
         extendedData.discussion_end_date = end;
       }
@@ -1289,6 +1317,8 @@ export const mockApi = {
           delete dbPayload.question_end_date;
           delete dbPayload.discussion_start_date;
           delete dbPayload.discussion_end_date;
+          delete dbPayload.episode_start_date;
+          delete dbPayload.episode_end_date;
 
           if (targetId) {
             const { error: updateError } = await supabase
@@ -1358,7 +1388,9 @@ export const mockApi = {
             question_start_date: extendedData.question_start_date !== undefined ? extendedData.question_start_date : mbList[idx].question_start_date,
             question_end_date: extendedData.question_end_date !== undefined ? extendedData.question_end_date : mbList[idx].question_end_date,
             discussion_start_date: extendedData.discussion_start_date !== undefined ? extendedData.discussion_start_date : mbList[idx].discussion_start_date,
-            discussion_end_date: extendedData.discussion_end_date !== undefined ? extendedData.discussion_end_date : mbList[idx].discussion_end_date
+            discussion_end_date: extendedData.discussion_end_date !== undefined ? extendedData.discussion_end_date : mbList[idx].discussion_end_date,
+            episode_start_date: extendedData.episode_start_date !== undefined ? extendedData.episode_start_date : mbList[idx].episode_start_date,
+            episode_end_date: extendedData.episode_end_date !== undefined ? extendedData.episode_end_date : mbList[idx].episode_end_date
           };
           if (data.book_id) {
             mbList[idx].book_id = data.book_id;
@@ -1459,18 +1491,40 @@ export const mockApi = {
       }
 
       const extendedData: any = { ...data };
-      if (data.timeline_reading !== undefined) {
-        const { start, end } = parseTimelineRange(data.timeline_reading);
+      const tReading = data.timeline_reading;
+      const tQuestion = data.timeline_question;
+      const tDiscussion = data.timeline_discussion;
+
+      if (tReading !== undefined) {
+        const { start, end } = parseTimelineRange(tReading);
         extendedData.reading_start_date = start;
-        extendedData.reading_end_date = end;
+        extendedData.episode_start_date = start;
+        extendedData.episode_end_date = end;
+        
+        let rEnd = end;
+        const qStartStr = tQuestion !== undefined ? parseTimelineRange(tQuestion).start : null;
+        if (qStartStr) {
+          const qStartDate = new Date(qStartStr);
+          qStartDate.setDate(qStartDate.getDate() - 1);
+          rEnd = formatToLocalYmd(qStartDate);
+        }
+        extendedData.reading_end_date = rEnd;
       }
-      if (data.timeline_question !== undefined) {
-        const { start, end } = parseTimelineRange(data.timeline_question);
+
+      if (tQuestion !== undefined) {
+        const { start, end } = parseTimelineRange(tQuestion);
         extendedData.question_start_date = start;
         extendedData.question_end_date = end;
+        
+        if (tReading === undefined && start) {
+          const qStartDate = new Date(start);
+          qStartDate.setDate(qStartDate.getDate() - 1);
+          extendedData.reading_end_date = formatToLocalYmd(qStartDate);
+        }
       }
-      if (data.timeline_discussion !== undefined) {
-        const { start, end } = parseTimelineRange(data.timeline_discussion);
+
+      if (tDiscussion !== undefined) {
+        const { start, end } = parseTimelineRange(tDiscussion);
         extendedData.discussion_start_date = start;
         extendedData.discussion_end_date = end;
       }
@@ -1484,6 +1538,8 @@ export const mockApi = {
           delete dbPayload.question_end_date;
           delete dbPayload.discussion_start_date;
           delete dbPayload.discussion_end_date;
+          delete dbPayload.episode_start_date;
+          delete dbPayload.episode_end_date;
 
           const { error: updateError } = await supabase
             .from('monthly_books')
@@ -1528,7 +1584,9 @@ export const mockApi = {
           question_start_date: extendedData.question_start_date !== undefined ? extendedData.question_start_date : mbList[idx].question_start_date,
           question_end_date: extendedData.question_end_date !== undefined ? extendedData.question_end_date : mbList[idx].question_end_date,
           discussion_start_date: extendedData.discussion_start_date !== undefined ? extendedData.discussion_start_date : mbList[idx].discussion_start_date,
-          discussion_end_date: extendedData.discussion_end_date !== undefined ? extendedData.discussion_end_date : mbList[idx].discussion_end_date
+          discussion_end_date: extendedData.discussion_end_date !== undefined ? extendedData.discussion_end_date : mbList[idx].discussion_end_date,
+          episode_start_date: extendedData.episode_start_date !== undefined ? extendedData.episode_start_date : mbList[idx].episode_start_date,
+          episode_end_date: extendedData.episode_end_date !== undefined ? extendedData.episode_end_date : mbList[idx].episode_end_date
         };
         if (typeof window !== 'undefined') {
           localStorage.setItem(KEY_MONTHLY_BOOKS, JSON.stringify(mbList));
@@ -4482,44 +4540,17 @@ export function getStageByDates(mb: any): 'reading' | 'question_collecting' | 'd
     return parseDateString(ymd);
   };
 
-  let readStart: Date | null = null;
-  let readEnd: Date | null = null;
-  let qStart: Date | null = null;
-  let qEnd: Date | null = null;
-  let tStart: Date | null = null;
-  let tEnd: Date | null = null;
+  // timeline_reading 파싱 결과를 전체 회차 기간으로 취급
+  const { start: totalStart, end: totalEnd } = parseTimelineRange(mb.timeline_reading);
+  const { start: qStartStr, end: qEndStr } = parseTimelineRange(mb.timeline_question);
+  const { start: dStartStr, end: dEndStr } = parseTimelineRange(mb.timeline_discussion);
 
-  if (mb.reading_start_date && mb.reading_end_date) {
-    readStart = parseYmd(mb.reading_start_date);
-    readEnd = parseYmd(mb.reading_end_date);
-    qStart = parseYmd(mb.question_start_date);
-    qEnd = parseYmd(mb.question_end_date);
-    tStart = parseYmd(mb.discussion_start_date);
-    tEnd = parseYmd(mb.discussion_end_date);
-  } else {
-    // 하위 호환성 (레거시 timeline_* 파싱)
-    if (mb.timeline_reading) {
-      const parts = mb.timeline_reading.split('~');
-      if (parts.length === 2) {
-        readStart = parseDateString(parts[0]);
-        readEnd = parseDateString(parts[1]);
-      }
-    }
-    if (mb.timeline_question) {
-      const parts = mb.timeline_question.split('~');
-      if (parts.length === 2) {
-        qStart = parseDateString(parts[0]);
-        qEnd = parseDateString(parts[1]);
-      }
-    }
-    if (mb.timeline_discussion) {
-      const parts = mb.timeline_discussion.split('~');
-      if (parts.length === 2) {
-        tStart = parseDateString(parts[0]);
-        tEnd = parseDateString(parts[1]);
-      }
-    }
-  }
+  const readStart = parseYmd(mb.episode_start_date || totalStart);
+  const readEnd = parseYmd(mb.episode_end_date || totalEnd); // 전체 회차 종료일
+  const qStart = parseYmd(mb.question_start_date || qStartStr);
+  const qEnd = parseYmd(mb.question_end_date || qEndStr);
+  const tStart = parseYmd(mb.discussion_start_date || dStartStr);
+  const tEnd = parseYmd(mb.discussion_end_date || dEndStr);
 
   if (!readStart || !readEnd) return 'reading';
 
@@ -4702,23 +4733,25 @@ export function parseTimelineRange(timeline: string | null): { start: string | n
  * monthly_book의 시작일과 종료일 문자열(YYYY-MM-DD)을 도출하는 헬퍼
  */
 export function getMbStartEndDates(mb: any): { startDate: string | null; endDate: string | null } {
-  if (mb.reading_start_date && mb.reading_end_date) {
+  if (mb.episode_start_date && mb.episode_end_date) {
     return {
-      startDate: mb.reading_start_date,
-      endDate: mb.reading_end_date
+      startDate: mb.episode_start_date,
+      endDate: mb.episode_end_date
     };
   }
-  let startDate: string | null = null;
-  let endDate: string | null = null;
   if (mb.timeline_reading) {
     const parts = mb.timeline_reading.split('~');
     if (parts.length === 2) {
       const s = parseDateString(parts[0]);
       const e = parseDateString(parts[1]);
-      if (s) startDate = formatToLocalYmd(s);
-      if (e) endDate = formatToLocalYmd(e);
+      return {
+        startDate: s ? formatToLocalYmd(s) : null,
+        endDate: e ? formatToLocalYmd(e) : null
+      };
     }
   }
+  let startDate: string | null = mb.reading_start_date || null;
+  let endDate: string | null = mb.reading_end_date || null;
   if (!startDate || !endDate) {
     if (mb.month) {
       const parts = mb.month.split('-');
@@ -4776,24 +4809,30 @@ export function calculateDefaultNextTimeline(allMbs: any[]): string | null {
  */
 export function enrichMonthlyBookDates(mb: any): any {
   if (!mb) return mb;
-  
-  // 이미 DATE 컬럼들이 정의되어 있는 경우(예: Mock 로컬스토리지 구조) 그대로 보존
-  if (mb.reading_start_date && mb.reading_end_date) {
-    return mb;
-  }
 
-  const { start: rStart, end: rEnd } = parseTimelineRange(mb.timeline_reading);
+  const { start: totalStart, end: totalEnd } = parseTimelineRange(mb.timeline_reading);
   const { start: qStart, end: qEnd } = parseTimelineRange(mb.timeline_question);
   const { start: dStart, end: dEnd } = parseTimelineRange(mb.timeline_discussion);
 
+  // 실제 독서 종료일은 질문 수집 시작일의 전날 (없으면 전체 종료일)
+  let rEnd = totalEnd;
+  if (qStart) {
+    const qStartDate = new Date(qStart);
+    qStartDate.setDate(qStartDate.getDate() - 1);
+    rEnd = formatToLocalYmd(qStartDate);
+  }
+
   return {
     ...mb,
-    reading_start_date: rStart,
+    reading_start_date: totalStart,
     reading_end_date: rEnd,
     question_start_date: qStart,
     question_end_date: qEnd,
     discussion_start_date: dStart,
-    discussion_end_date: dEnd
+    discussion_end_date: dEnd,
+    episode_start_date: totalStart,
+    episode_end_date: totalEnd,
+    recap_date: totalEnd
   };
 }
 
