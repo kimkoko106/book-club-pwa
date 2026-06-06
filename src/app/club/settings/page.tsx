@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi, isMockMode, supabase, getStageByDates, calculateTimelineDates, parseDateString } from '../../../lib/supabase';
+import { mockApi, isMockMode, supabase, getStageByDates, calculateTimelineDates, parseDateString, formatToLocalYmd, getMbStartEndDates } from '../../../lib/supabase';
 import { BookClub, Book, UserBookProgress } from '../../../types';
 import { 
   ArrowLeft, 
@@ -285,11 +285,17 @@ export default function ClubSettingsPage() {
         setTStartDate(tempTStart);
         setTEndDate(tempTEnd);
 
-        const calculated = getStageByDates(
-          `${tempStart}~${tempEnd}`,
-          tempQStart && tempQEnd ? `${tempQStart}~${tempQEnd}` : null,
-          tempTStart && tempTEnd ? `${tempTStart}~${tempTEnd}` : null
-        );
+        const calculated = getStageByDates({
+          timeline_reading: `${tempStart}~${tempEnd}`,
+          timeline_question: tempQStart && tempQEnd ? `${tempQStart}~${tempQEnd}` : null,
+          timeline_discussion: tempTStart && tempTEnd ? `${tempTStart}~${tempTEnd}` : null,
+          reading_start_date: tempStart,
+          reading_end_date: tempEnd,
+          question_start_date: tempQStart,
+          question_end_date: tempQEnd,
+          discussion_start_date: tempTStart,
+          discussion_end_date: tempTEnd
+        });
         let uiStage = calculated === 'archived_recap' ? 'archiving' : calculated;
         setStage(uiStage as any);
         localStorage.setItem(`bookclub_mock_club_stage_${club.id}`, uiStage);
@@ -403,12 +409,11 @@ export default function ClubSettingsPage() {
         baseDate.setDate(baseDate.getDate() + 1); // 종료일 다음 날
       }
       
-      const formatYmd = (d: Date) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-      tempStart = formatYmd(baseDate);
+      tempStart = formatToLocalYmd(baseDate) || '';
       
       const targetEnd = new Date(baseDate);
       targetEnd.setDate(targetEnd.getDate() + 29); // 30일 뒤
-      tempEnd = formatYmd(targetEnd);
+      tempEnd = formatToLocalYmd(targetEnd) || '';
     }
 
     setStartDate(tempStart);
@@ -649,17 +654,7 @@ export default function ClubSettingsPage() {
           if (mb.stage === 'recap' || mb.stage === 'archived' || mb.stage === 'cancelled' || mb.stage === 'replaced') continue;
           if (!mb.timeline_reading) continue;
           
-          let targetStart: string | null = null;
-          let targetEnd: string | null = null;
-          if (mb.timeline_reading) {
-            const p = mb.timeline_reading.split('~');
-            if (p.length === 2) {
-              const s = parseDateString(p[0]);
-              const e = parseDateString(p[1]);
-              if (s) targetStart = s.toISOString().split('T')[0];
-              if (e) targetEnd = e.toISOString().split('T')[0];
-            }
-          }
+          const { startDate: targetStart, endDate: targetEnd } = getMbStartEndDates(mb);
           if (targetStart && targetEnd) {
             if (newStart <= targetEnd && targetStart <= newEnd) {
               const bookTitle = mb.books?.title || '제목 없음';
@@ -1130,7 +1125,17 @@ export default function ClubSettingsPage() {
       const timelineDiscussion = tStartDate && tEndDate ? `${tStartDate}~${tEndDate}` : null;
 
       // Calculate stage based on dates
-      const calculated = getStageByDates(timelineReading, timelineQuestion, timelineDiscussion);
+      const calculated = getStageByDates({
+        timeline_reading: timelineReading,
+        timeline_question: timelineQuestion,
+        timeline_discussion: timelineDiscussion,
+        reading_start_date: startDate,
+        reading_end_date: endDate,
+        question_start_date: qStartDate,
+        question_end_date: qEndDate,
+        discussion_start_date: tStartDate,
+        discussion_end_date: tEndDate
+      });
       
       // DB stage mapping
       let dbStage: 'reading' | 'question' | 'discussion' | 'recap' = 'reading';

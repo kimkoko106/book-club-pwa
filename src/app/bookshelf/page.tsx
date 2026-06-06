@@ -22,6 +22,7 @@ import {
 
 interface ShelfBook {
   id: string;
+  book_id?: string; // 마스터 책 ID
   title: string;
   author: string;
   cover_url: string;
@@ -30,6 +31,14 @@ interface ShelfBook {
   completed_date?: string; // 완독일 (다 읽음 상태일 때만)
   is_recommended: boolean; // 모임 추천 여부 배지
   memo_count?: number; // 사색 메모 누적 개수
+  total_pages?: number | null;
+  isbn?: string;
+  isbn13?: string;
+  source?: string;
+  source_id?: string;
+  publisher?: string;
+  description?: string;
+  published_at?: string;
 }
 
 interface Memo {
@@ -126,6 +135,9 @@ export default function PersonalBookshelfPage() {
   // 모달 제어
   const [isAddBookModalOpen, setIsAddBookModalOpen] = useState(false);
   const [isRecommendModalOpen, setIsRecommendModalOpen] = useState(false);
+  
+  // 모임 ID 상태 추가
+  const [activeClubId, setActiveClubId] = useState<string>('club-1');
 
   // 책 추가 입력 상태
   const [searchQuery, setSearchQuery] = useState('');
@@ -200,6 +212,16 @@ export default function PersonalBookshelfPage() {
 
         // 실제 세션 유저 ID 기반으로 책장 로드 진행
         await loadShelfData(data.user.id);
+
+        // 가입한 모임 목록 조회하여 첫 모임 ID 설정
+        try {
+          const myClubs = await mockApi.clubs.getMyClubs(data.user.id);
+          if (myClubs && myClubs.length > 0) {
+            setActiveClubId(myClubs[0].id);
+          }
+        } catch (clubErr) {
+          console.warn('모임 목록 조회 실패:', clubErr);
+        }
 
 
 
@@ -339,55 +361,96 @@ export default function PersonalBookshelfPage() {
   };
 
   // 모임 추천 수정 처리 저장
-  const handleSaveRecommendEdit = (e: React.FormEvent) => {
+  const handleSaveRecommendEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeMenuBook) return;
+    if (!currentUser || !activeMenuBook) return;
 
-    // 1. 책장 추천 상태 업데이트
-    const updatedShelf = shelfBooks.map(b => {
-      if (b.id === activeMenuBook.id) {
-        return {
-          ...b,
-          is_recommended: editIsRecommended
-        };
-      }
-      return b;
-    });
-    setShelfBooks(updatedShelf);
-    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
-
-    // 2. 추천방 연동 처리
-    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
-    let candidates = storedCandidatesStr ? JSON.parse(storedCandidatesStr) : [];
-    
-    if (editIsRecommended) {
-      const matchedIndex = candidates.findIndex((c: any) => c.title === activeMenuBook.title && c.author === activeMenuBook.author);
-      const newCandidate = {
-        id: matchedIndex > -1 ? candidates[matchedIndex].id : `cand-${Date.now()}`,
-        title: activeMenuBook.title,
-        author: activeMenuBook.author,
-        cover_url: activeMenuBook.cover_url || '',
-        total_pages: 300,
-        recommended_by: currentUser?.username || '익명',
-        type: editRecommendType,
-        reason: editRecommendReason.trim() || '함께 나누고 싶은 도서입니다.',
-        reactions: matchedIndex > -1 ? candidates[matchedIndex].reactions : { curious: 0, with_you: 0 },
-        created_at: matchedIndex > -1 ? candidates[matchedIndex].created_at : new Date().toISOString()
-      };
-
-      if (matchedIndex > -1) {
-        candidates[matchedIndex] = newCandidate;
+    try {
+      if (editIsRecommended) {
+        // 추천하는 경우 API 호출
+        await mockApi.recommendations.addRecommendation(
+          activeClubId,
+          currentUser.id,
+          {
+            title: activeMenuBook.title,
+            author: activeMenuBook.author,
+            cover_url: activeMenuBook.cover_url || '',
+            total_pages: activeMenuBook.total_pages || null,
+            isbn: (activeMenuBook as any).isbn,
+            isbn13: (activeMenuBook as any).isbn13,
+            source: (activeMenuBook as any).source,
+            source_id: (activeMenuBook as any).source_id,
+            publisher: (activeMenuBook as any).publisher,
+            description: (activeMenuBook as any).description,
+            published_at: (activeMenuBook as any).published_at
+          },
+          editRecommendType,
+          editRecommendReason.trim()
+        );
       } else {
-        candidates = [newCandidate, ...candidates];
+        // 추천을 취소하는 경우 API 호출 (book_id가 있을 경우 삭제 처리)
+        const targetBookId = (activeMenuBook as any).book_id;
+        if (targetBookId) {
+          await mockApi.recommendations.deleteRecommendation(
+            activeClubId,
+            currentUser.id,
+            targetBookId
+          );
+        }
       }
-    } else {
-      candidates = candidates.filter((c: any) => !(c.title === activeMenuBook.title && c.author === activeMenuBook.author));
-    }
-    localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(candidates));
 
-    setIsRecommendEditOpen(false);
-    setActiveMenuBook(null);
-    alert(`[${activeMenuBook.title}] 모임 추천 설정이 저장되었습니다.`);
+      // 1. 책장 추천 상태 업데이트 (UI)
+      const updatedShelf = shelfBooks.map(b => {
+        if (b.id === activeMenuBook.id) {
+          return {
+            ...b,
+            is_recommended: editIsRecommended
+          };
+        }
+        return b;
+      });
+      setShelfBooks(updatedShelf);
+      localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+
+      // 2. 추천방 연동 처리 (로컬 스토리지 하위 호환용)
+      const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
+      let candidates = storedCandidatesStr ? JSON.parse(storedCandidatesStr) : [];
+      
+      if (editIsRecommended) {
+        const matchedIndex = candidates.findIndex((c: any) => c.title === activeMenuBook.title && c.author === activeMenuBook.author);
+        const newCandidate = {
+          id: matchedIndex > -1 ? candidates[matchedIndex].id : `cand-${Date.now()}`,
+          title: activeMenuBook.title,
+          author: activeMenuBook.author,
+          cover_url: activeMenuBook.cover_url || '',
+          total_pages: activeMenuBook.total_pages || 300,
+          recommended_by: currentUser?.username || '익명',
+          type: editRecommendType,
+          reason: editRecommendReason.trim() || '함께 나누고 싶은 도서입니다.',
+          reactions: matchedIndex > -1 ? candidates[matchedIndex].reactions : { curious: 0, with_you: 0 },
+          created_at: matchedIndex > -1 ? candidates[matchedIndex].created_at : new Date().toISOString()
+        };
+
+        if (matchedIndex > -1) {
+          candidates[matchedIndex] = newCandidate;
+        } else {
+          candidates = [newCandidate, ...candidates];
+        }
+      } else {
+        candidates = candidates.filter((c: any) => !(c.title === activeMenuBook.title && c.author === activeMenuBook.author));
+      }
+      localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(candidates));
+
+      // 3. UI 갱신을 위해 데이터 재로드
+      await loadShelfData(currentUser.id);
+
+      setIsRecommendEditOpen(false);
+      setActiveMenuBook(null);
+      alert(`[${activeMenuBook.title}] 모임 추천 설정이 저장되었습니다.`);
+    } catch (err: any) {
+      console.error('추천 수정 실패:', err);
+      alert('추천 설정을 저장하지 못했습니다. 잠시 후 다시 시도해주세요.');
+    }
   };
 
   // 도서 삭제 처리
@@ -398,6 +461,34 @@ export default function PersonalBookshelfPage() {
     setDeleteBookErrorMsg('');
 
     try {
+      // 1. 모임 추천 내역이 있다면 book_recommendations DB에서 삭제
+      const targetBookId = (activeMenuBook as any).book_id;
+      if (targetBookId) {
+        try {
+          await mockApi.recommendations.deleteRecommendation(
+            activeClubId,
+            currentUser.id,
+            targetBookId
+          );
+        } catch (recDelErr) {
+          // 추천 내역 삭제에 실패하더라도 (예: 추천하지 않은 책인 경우) 무시하고 다음 단계로 진행
+          console.warn('추천 내역 삭제 실패 (추천하지 않은 도서일 수 있음):', recDelErr);
+        }
+      }
+
+      // 2. 추천방 로컬 캐시 동기화 (로컬 스토리지 하위 호환용)
+      const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
+      if (storedCandidatesStr) {
+        try {
+          let candidates = JSON.parse(storedCandidatesStr);
+          candidates = candidates.filter((c: any) => !(c.title === activeMenuBook.title && c.author === activeMenuBook.author));
+          localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(candidates));
+        } catch (storageErr) {
+          console.warn('로컬 스토리지 추천방 캐시 갱신 실패:', storageErr);
+        }
+      }
+
+      // 3. 내 책장에서 도서 삭제 (user_books 레코드 제거)
       await mockApi.books.deleteUserBook(currentUser.id, activeMenuBook.id);
 
       // UI 목록에서 즉시 제거
@@ -501,49 +592,78 @@ export default function PersonalBookshelfPage() {
   };
 
   // 4. 모임에 추천 등록 (실제 다음 책 후보방 연동)
-  const handleRecommendToClub = (e: React.FormEvent) => {
+  const handleRecommendToClub = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedRecommendBook) return;
+    if (!currentUser || !selectedRecommendBook) return;
     if (!recommendReason.trim()) {
       alert('추천 이유를 적어주세요.');
       return;
     }
 
-    // A. 내 책장 리스트의 추천 배지 업데이트
-    const updatedShelf = shelfBooks.map(b => {
-      if (b.id === selectedRecommendBook.id) {
-        return { ...b, is_recommended: true };
-      }
-      return b;
-    });
-    setShelfBooks(updatedShelf);
-    localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
+    try {
+      // API(Supabase 또는 Mock) 호출
+      await mockApi.recommendations.addRecommendation(
+        activeClubId,
+        currentUser.id,
+        {
+          title: selectedRecommendBook.title,
+          author: selectedRecommendBook.author,
+          cover_url: selectedRecommendBook.cover_url || '',
+          total_pages: selectedRecommendBook.total_pages || null,
+          isbn: (selectedRecommendBook as any).isbn,
+          isbn13: (selectedRecommendBook as any).isbn13,
+          source: (selectedRecommendBook as any).source,
+          source_id: (selectedRecommendBook as any).source_id,
+          publisher: (selectedRecommendBook as any).publisher,
+          description: (selectedRecommendBook as any).description,
+          published_at: (selectedRecommendBook as any).published_at
+        },
+        recommendType,
+        recommendReason.trim()
+      );
 
-    // B. 다음 책 후보방 스토리지(`bookclub_next_book_candidates`)에 push
-    const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
-    const storedCandidates = storedCandidatesStr ? JSON.parse(storedCandidatesStr) : [];
-    
-    const newCandidate = {
-      id: `cand-${Date.now()}`,
-      title: selectedRecommendBook.title,
-      author: selectedRecommendBook.author,
-      cover_url: selectedRecommendBook.cover_url,
-      total_pages: 300, // 더미 페이지 수
-      recommended_by: currentUser?.username || '익명',
-      type: recommendType,
-      reason: recommendReason.trim(),
-      reactions: { curious: 0, with_you: 0 },
-      created_at: new Date().toISOString()
-    };
+      // A. 내 책장 리스트의 추천 배지 업데이트
+      const updatedShelf = shelfBooks.map(b => {
+        if (b.id === selectedRecommendBook.id) {
+          return { ...b, is_recommended: true };
+        }
+        return b;
+      });
+      setShelfBooks(updatedShelf);
+      localStorage.setItem('bookclub_personal_shelf', JSON.stringify(updatedShelf));
 
-    const nextCandidates = [newCandidate, ...storedCandidates];
-    localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(nextCandidates));
+      // B. 다음 책 후보방 스토리지(`bookclub_next_book_candidates`)에 push (하위 호환용)
+      const storedCandidatesStr = localStorage.getItem('bookclub_next_book_candidates');
+      const storedCandidates = storedCandidatesStr ? JSON.parse(storedCandidatesStr) : [];
+      
+      const newCandidate = {
+        id: `cand-${Date.now()}`,
+        title: selectedRecommendBook.title,
+        author: selectedRecommendBook.author,
+        cover_url: selectedRecommendBook.cover_url,
+        total_pages: selectedRecommendBook.total_pages || 300,
+        recommended_by: currentUser?.username || '익명',
+        type: recommendType,
+        reason: recommendReason.trim(),
+        reactions: { curious: 0, with_you: 0 },
+        created_at: new Date().toISOString()
+      };
 
-    // C. 마무리
-    setSelectedRecommendBook(null);
-    setRecommendReason('');
-    setIsRecommendModalOpen(false);
-    alert(`[${selectedRecommendBook.title}] 도서가 '다음 책 후보방'에 성공적으로 추천되었습니다!`);
+      const nextCandidates = [newCandidate, ...storedCandidates];
+      localStorage.setItem('bookclub_next_book_candidates', JSON.stringify(nextCandidates));
+
+      // C. UI 갱신을 위해 데이터 재로드
+      await loadShelfData(currentUser.id);
+
+      // D. 마무리
+      setSelectedRecommendBook(null);
+      setRecommendReason('');
+      setIsRecommendModalOpen(false);
+      alert(`[${selectedRecommendBook.title}] 도서가 '다음 책 후보방'에 성공적으로 추천되었습니다!`);
+    } catch (err: any) {
+      console.error('추천 등록 실패:', err);
+      alert('추천을 등록하지 못했습니다. 잠시 후 다시 시도해주세요.');
+    }
   };
 
   // 특정 도서의 사색 메모 로드 함수

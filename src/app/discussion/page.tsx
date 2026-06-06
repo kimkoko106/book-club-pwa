@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { mockApi, DiscussionQuestion, isMockMode, supabase, getStageByDates } from '../../lib/supabase';
+import { mockApi, DiscussionQuestion, isMockMode, supabase, getStageByDates, parseDateString } from '../../lib/supabase';
 import Navigation from '../../components/Navigation';
 import SpoilerWarningModal from '../../components/SpoilerWarningModal';
 import { 
@@ -17,8 +17,49 @@ import {
   Calendar,
   Layers,
   Info,
-  Compass
+  Compass,
+  Coffee,
+  BookOpen
 } from 'lucide-react';
+
+// 디데이 계산 헬퍼
+const getDDay = (mb: any): string => {
+  if (!mb) return '일정 조율 중';
+  
+  let startDateStr: string | null = null;
+  if (mb.reading_start_date) {
+    startDateStr = mb.reading_start_date;
+  } else if (mb.timeline_reading) {
+    const parts = mb.timeline_reading.split('~');
+    if (parts.length === 2) {
+      startDateStr = parts[0].trim();
+    }
+  }
+  
+  if (!startDateStr) return '일정 조율 중';
+  
+  const target = new Date(startDateStr);
+  const today = new Date();
+  
+  target.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  
+  const diffTime = target.getTime() - today.getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  if (diffDays === 0) return 'D-Day';
+  if (diffDays > 0) return `D-${diffDays}`;
+  return `시작됨`;
+};
+
+const formatYmdToMd = (ymd: string | null): string => {
+  if (!ymd) return '';
+  const parts = ymd.split('-');
+  if (parts.length === 3) {
+    return `${parts[1]}.${parts[2]}`;
+  }
+  return ymd;
+};
 
 const KEY_FEEDBACKS = 'bookclub_mock_feedbacks';
 
@@ -121,11 +162,7 @@ export default function DiscussionPage() {
             setNextBook(null);
           }
           if (monthlyBook) {
-            const calculatedStage = getStageByDates(
-              monthlyBook.timeline_reading,
-              monthlyBook.timeline_question,
-              monthlyBook.timeline_discussion
-            );
+            const calculatedStage = getStageByDates(monthlyBook);
 
             if (calculatedStage === 'archived_recap') {
               // 결산 유예 단계: 메인에는 새 공유책이 없는 상태로 처리
@@ -150,48 +187,30 @@ export default function DiscussionPage() {
             if (archives.length > 0) {
               const latestArchive = archives[0];
               const archiveDetail = await mockApi.discussion.getArchiveDetail(latestArchive.id);
-              if (archiveDetail && archiveDetail.timeline_reading) {
-                const parts = archiveDetail.timeline_reading.split('~');
-                if (parts.length === 2) {
-                  const readEnd = parts[1];
-                  const parseMMDD = (mmdd: string): Date | null => {
-                    const pts = mmdd.trim().split('.');
-                    if (pts.length !== 2) return null;
-                    const month = parseInt(pts[0], 10);
-                    const day = parseInt(pts[1], 10);
-                    if (isNaN(month) || isNaN(day)) return null;
-                    const date = new Date(new Date().getFullYear(), month - 1, day);
-                    date.setHours(0, 0, 0, 0);
-                    return date;
-                  };
+              const readEnd = archiveDetail.reading_end_date || (archiveDetail.timeline_reading ? archiveDetail.timeline_reading.split('~')[1] : null);
+              if (readEnd) {
+                const readEndDate = parseDateString(readEnd);
+                if (readEndDate) {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
 
-                  const readEndDate = parseMMDD(readEnd);
-                  if (readEndDate) {
-                    const today = new Date();
-                    today.setHours(0, 0, 0, 0);
+                  const graceStart = new Date(readEndDate);
+                  graceStart.setDate(graceStart.getDate() + 1);
+                  const graceEnd = new Date(readEndDate);
+                  graceEnd.setDate(graceEnd.getDate() + 7);
 
-                    const graceStart = new Date(readEndDate);
-                    graceStart.setDate(graceStart.getDate() + 1);
-                    const graceEnd = new Date(readEndDate);
-                    graceEnd.setDate(graceEnd.getDate() + 7);
-
-                    if (today >= graceStart && today <= graceEnd) {
-                      setShowRecapGraceCard(true);
-                      setPrevRecapBook(latestArchive);
-                    } else {
-                      setShowRecapGraceCard(false);
-                      setPrevRecapBook(null);
-                    }
+                  if (today >= graceStart && today <= graceEnd) {
+                    setShowRecapGraceCard(true);
+                    setPrevRecapBook(latestArchive);
+                  } else {
+                    setShowRecapGraceCard(false);
+                    setPrevRecapBook(null);
                   }
                 }
               }
             } else {
               if (monthlyBook) {
-                const tempStage = getStageByDates(
-                  monthlyBook.timeline_reading,
-                  monthlyBook.timeline_question,
-                  monthlyBook.timeline_discussion
-                );
+                const tempStage = getStageByDates(monthlyBook);
                 if (tempStage === 'archived_recap') {
                   setShowRecapGraceCard(true);
                   setPrevRecapBook(monthlyBook);
@@ -812,11 +831,9 @@ export default function DiscussionPage() {
                     <div className="flex justify-between items-center text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider">
                       <span>다음 예정 공유도서 🌱</span>
                       <span className="text-sage-dark font-black">
-                        {nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => {
-                          const parts = d.trim().split('-');
-                          if (parts.length === 3) return `${parts[1]}.${parts[2]}`;
-                          return d;
-                        }).join(' ~ ') : '일정 조율 중'}
+                        {nextMonthlyBook.reading_start_date && nextMonthlyBook.reading_end_date
+                          ? `${formatYmdToMd(nextMonthlyBook.reading_start_date)} ~ ${formatYmdToMd(nextMonthlyBook.reading_end_date)}`
+                          : (nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~').map((d: string) => formatYmdToMd(d.trim())).join(' ~ ') : '일정 조율 중')}
                       </span>
                     </div>
                     <div className="flex gap-3 items-center">
@@ -852,22 +869,68 @@ export default function DiscussionPage() {
             )}
           </>
         ) : (
-          /* 새 공유책이 없는 경우 예외 상태 노출 */
-          <div className="bg-card-bg border border-card-border border-dashed rounded-2xl p-6.5 text-center flex flex-col items-center gap-3.5 shadow-sm my-8">
-            <div className="w-12 h-12 bg-sage-light/40 rounded-2xl flex justify-center items-center text-sage-dark shadow-inner">
-              <Compass size={20} />
+          /* 새 공유책이 없는 경우 예외 상태 노출 (휴식 기간 여부 판단) */
+          nextBook && nextMonthlyBook ? (
+            <div className="bg-card-bg border border-card-border rounded-2xl p-6.5 text-center flex flex-col items-center gap-4.5 shadow-sm relative overflow-hidden transition-all duration-300 hover:shadow-md my-8">
+              {/* 디데이 배지 */}
+              <div className="absolute top-4 right-4 bg-sage-medium text-white px-3 py-1.5 rounded-full text-[10px] font-black shadow-xs">
+                {getDDay(nextMonthlyBook)}
+              </div>
+              
+              <div className="w-12 h-12 bg-sage-light/40 rounded-2xl flex justify-center items-center text-sage-dark shadow-inner mt-2">
+                <Coffee size={22} className="text-sage-medium animate-pulse" />
+              </div>
+              
+              <div className="flex flex-col gap-1 px-1">
+                <h4 className="text-sm font-black text-foreground leading-snug">휴식 기간 ☕</h4>
+                <p className="text-[11px] text-foreground/50 leading-relaxed font-semibold">지금은 독서 휴식 기간입니다. 다음 독서를 준비 중입니다.</p>
+              </div>
+              
+              {/* 다음 공유도서 상세 카드 */}
+              <div className="w-full bg-sage-light/15 border border-sage-light/45 rounded-2xl p-4 flex flex-col gap-3">
+                <div className="text-[9.5px] font-bold text-foreground/45 pb-1 border-b border-card-border/40 uppercase tracking-wider text-left">
+                  다음 예정 공유도서 🌱
+                </div>
+                <div className="flex gap-4 items-center">
+                  {nextBook.cover_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img 
+                      src={nextBook.cover_url} 
+                      alt="Cover" 
+                      className="w-11 h-15 rounded object-cover border border-card-border shadow-xs flex-shrink-0" 
+                    />
+                  ) : (
+                    <div className="w-11 h-15 rounded bg-sage-light/20 border border-card-border/70 flex justify-center items-center text-xs text-sage-dark font-bold flex-shrink-0">📖</div>
+                  )}
+                  <div className="flex-grow min-w-0 text-left">
+                    <h4 className="text-xs font-black text-foreground truncate">{nextBook.title}</h4>
+                    <p className="text-[10px] text-foreground/55 font-medium truncate mt-0.5">{nextBook.author}</p>
+                    <p className="text-[9px] text-sage-dark font-black mt-1.5 bg-sage-light/40 px-2 py-0.5 rounded-md inline-block">
+                      시작일: {nextMonthlyBook.reading_start_date
+                      ? nextMonthlyBook.reading_start_date.replace(/-/g, '.')
+                      : (nextMonthlyBook.timeline_reading ? nextMonthlyBook.timeline_reading.split('~')[0].trim().replace(/-/g, '.') : '일정 조율 중')}
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div className="flex flex-col gap-1 px-1">
-              <h4 className="text-xs font-extrabold text-foreground leading-snug">다음 공유책을 제안해주세요 📖</h4>
-              <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">아직 현재 진행중인 새 공유도서가 등록되지 않았습니다.</p>
+          ) : (
+            <div className="bg-card-bg border border-card-border border-dashed rounded-2xl p-6.5 text-center flex flex-col items-center gap-3.5 shadow-sm my-8">
+              <div className="w-12 h-12 bg-sage-light/40 rounded-2xl flex justify-center items-center text-sage-dark shadow-inner">
+                <BookOpen size={20} />
+              </div>
+              <div className="flex flex-col gap-1 px-1">
+                <h4 className="text-xs font-extrabold text-foreground leading-snug">다음 공유책을 제안해주세요 📖</h4>
+                <p className="text-[10px] text-foreground/45 leading-relaxed font-semibold">아직 현재 진행중인 새 공유도서가 등록되지 않았습니다.</p>
+              </div>
+              <button
+                onClick={() => router.push('/club/candidate')}
+                className="px-4 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs transition-all cursor-pointer"
+              >
+                책 후보방으로 이동
+              </button>
             </div>
-            <button
-              onClick={() => router.push('/club/candidate')}
-              className="px-4 py-2.5 bg-sage-medium hover:bg-sage-dark text-white rounded-xl text-[10px] font-black shadow-xs transition-all cursor-pointer"
-            >
-              책 후보방으로 이동
-            </button>
-          </div>
+          )
         )}
 
         {/* 결산 유예 기간 grace card (독서 종료 후 7일 이내 노출 - 최하단 보조 노출) */}

@@ -52,11 +52,7 @@ export default function DiscussionDetailPage({ params }: DiscussionDetailPagePro
         if (q.club_id) {
           const mb = await mockApi.clubs.getMonthlyBook(q.club_id);
           if (mb) {
-            const calculatedStage = getStageByDates(
-              mb.timeline_reading,
-              mb.timeline_question,
-              mb.timeline_discussion
-            );
+            const calculatedStage = getStageByDates(mb);
             // 토론방에서는 archived_recap(결산 유예) 단계를 결산 화면(archiving)과 동일하게 봅니다.
             const uiStage = calculatedStage === 'archived_recap' ? 'archiving' : calculatedStage;
             setStageParam(uiStage);
